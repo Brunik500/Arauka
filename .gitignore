@@ -1,0 +1,30 @@
+node_modules/
+dist/
+.tmp/
+*.tsbuildinfo
+
+# Variables locales: la plantilla pública sí se versiona.
+.env*
+!.env.example
+
+# Credenciales y claves privadas locales.
+AI Keys.txt
+AI Keys*.txt
+*credentials*.json
+*secret*.json
+credentials.json
+service-account*.json
+*.pem
+*.key
+*.p12
+*.pfx
+*.jks
+*.keystore
+
+# Estado local de herramientas; nunca subir secretos de Wrangler/Supabase.
+.wrangler/
+.dev.vars
+.supabase/
+supabase/.temp/
+
+.DS_Store

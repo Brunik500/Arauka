@@ -1,0 +1,4 @@
+project_id = "arauka"
+
+[functions.send-notification]
+verify_jwt = false
