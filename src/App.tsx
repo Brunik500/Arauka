@@ -42,7 +42,8 @@ function CategoryIcon({ category, size=21 }: {category: string; size?:number}) {
   return <SlidersHorizontal size={size}/>
 }
 function statusName(status:Job['status']) {return ({open:'Publicado',matched:'Profesional seleccionado',completed:'Finalizado',cancelled:'Cancelado'} as const)[status]}
-const getName=(p?:Profile)=> p?.company_name?.trim() || p?.display_name || 'Profesional'
+const getPublicProfessionalName=(p?:Profile)=> p?.company_name?.trim() || p?.display_name || 'Profesional'
+const getAccountName=(p?:Profile)=>p?.display_name || 'Usuario ARAUKA'
 function emptyForm() { return { title:'', description:'', category:'', locality:'Villarrica' } }
 export default function App(){
   const [mode,setMode]=useState<Mode>(()=>parseRoute().mode)
@@ -71,13 +72,14 @@ export default function App(){
   const [reviewComment,setReviewComment]=useState('')
   const [contactResult,setContactResult]=useState<{name:string,phone:string}|null>(null)
   const [myPhone,setMyPhone]=useState('')
-  const [notifications,setNotifications]=useState<NotificationItem[]>([])
+  const [allNotifications,setNotifications]=useState<NotificationItem[]>([])
   const [emailEnabled,setEmailEnabled]=useState(false)
   const [authFields,setAuthFields]=useState({name:'',email:'',password:''})
   const [profileForm,setProfileForm]=useState({display_name:'',company_name:'',bio:'',categories:[] as string[],service_localities:[] as string[]})
   const data = configured ? store : demo
   const currentId = configured ? userId : mode==='cliente'?demoClient:demoPro
   const currentProfile=data.profiles.find(p=>p.id===currentId)
+  const getName=(profile?:Profile)=>screen==='cuenta'&&profile?.id===currentId?getAccountName(profile):getPublicProfessionalName(profile)
   const pro=data.profiles.find(p=>p.id===selectedPro)
   const job=data.jobs.find(j=>j.id===selectedJob)
   const signedIn = Boolean(currentId)
@@ -86,6 +88,17 @@ export default function App(){
   const myInterests=data.interests.filter(i=>i.pro_id===currentId)
   const openOpportunities=data.jobs.filter(j=>j.status==='open' && j.client_id!==currentId && (!currentProfile?.categories.length || currentProfile.categories.includes(j.category)) && (!currentProfile?.service_localities.length || currentProfile.service_localities.includes(j.locality)))
   const modeDescription = mode === 'cliente' ? 'Encuentra soluciones cerca de ti' : 'Conecta con nuevas oportunidades'
+  const notificationExperience=(notice:NotificationItem):Mode|null=>{
+    if(notice.kind==='interest')return 'cliente'
+    if(notice.kind==='selected')return 'maestro'
+    if(notice.kind==='contact_ready'){
+      const related=data.jobs.find(item=>item.id===notice.job_id)
+      if(related?.client_id===currentId)return 'cliente'
+      if(related?.selected_pro_id===currentId)return 'maestro'
+    }
+    return null
+  }
+  const notifications=allNotifications.filter(notice=>notificationExperience(notice)===mode)
 
   const notify=(value:string)=>{setMessage(value);setError('');window.scrollTo({top:0,behavior:'smooth'})}
   const warn=(value:string)=>{setError(value);setMessage('');window.scrollTo({top:0,behavior:'smooth'})}
@@ -106,6 +119,23 @@ export default function App(){
   function chooseExperience(role:Mode){goRoute('inicio',role,null,null);requestAuth('registro')}
   const requestAuth=(kind:AuthKind='registro')=>{setAuthKind(kind);setAuthOpen(true);setError('');setMessage('')}
   const requireUser=()=>{if(!signedIn){requestAuth('registro');return false} return true}
+  const clearUserState=()=>{
+    setStore(initialDemo);setNotifications([]);setEmailEnabled(false);setMyPhone('');setContactResult(null)
+    setSelectedJob(null);setSelectedPro(null);setEditingJobId(null);setJobError('');setAuthFields({name:'',email:'',password:''})
+  }
+  const resetToExperienceSelector=()=>{
+    clearUserState();setUserId(null);setExperienceChosen(false);setAuthOpen(false);setMode('cliente');setScreen('inicio')
+    setMessage('');setError('');history.replaceState(null,'',`${location.pathname}${location.search}`)
+    document.documentElement.dataset.araukaMode='cliente';window.scrollTo({top:0,behavior:'smooth'})
+  }
+  async function signOut(){
+    if(!supabase||busy)return
+    setBusy(true);setError('')
+    const {error}=await supabase.auth.signOut()
+    setBusy(false)
+    if(error){warn(`No se pudo cerrar la sesión: ${error.message}`);return}
+    resetToExperienceSelector()
+  }
 
   const refresh = useCallback(async ()=>{
     if(!supabase) return
@@ -118,6 +148,8 @@ export default function App(){
     ])
     const failure=[p,j,i,r,pt,v].find(x=>x.error)?.error
     if(failure) throw failure
+    const {data:{user:latestUser}}=await supabase.auth.getUser()
+    if(latestUser?.id!==user?.id)return
     setStore({profiles:p.data as Profile[] ?? [],jobs:j.data as Job[] ?? [],interests:i.data as Interest[] ?? [],reviews:r.data as Review[] ?? [],portfolio:pt.data as Portfolio[] ?? [],verifications:v.data as Verification[] ?? []})
   },[])
   useEffect(()=>{
@@ -125,7 +157,10 @@ export default function App(){
     const client=supabase
     let active=true
     client.auth.getUser().then(({data})=>{if(active)setUserId(data.user?.id ?? null)})
-    const {data:{subscription}}=client.auth.onAuthStateChange((_event,session)=>setUserId(session?.user?.id??null))
+    const {data:{subscription}}=client.auth.onAuthStateChange((event,session)=>{
+      setUserId(session?.user?.id??null)
+      if(event==='SIGNED_OUT')resetToExperienceSelector()
+    })
     return ()=>{active=false;subscription.unsubscribe()}
   },[])
   useEffect(()=>{if(!configured)return;setLoading(true);refresh().catch(e=>setError(`No se pudieron cargar los datos: ${e.message}`)).finally(()=>setLoading(false))},[refresh,userId])
@@ -142,7 +177,7 @@ export default function App(){
   },[userId])
   async function readNotification(n:NotificationItem){
     if(supabase&&!n.read_at){const {error}=await supabase.from('notifications').update({read_at:new Date().toISOString()}).eq('id',n.id);if(error){warn(error.message);return}setNotifications(prev=>prev.map(x=>x.id===n.id?{...x,read_at:new Date().toISOString()}:x))}
-    if(n.job_id){const related=data.jobs.find(j=>j.id===n.job_id);goRoute('detalle',related?.selected_pro_id===currentId?'maestro':'cliente',n.job_id,null)}
+    if(n.job_id){goRoute('detalle',notificationExperience(n)??mode,n.job_id,null)}
   }
   useEffect(()=>{
     if(!supabase||!userId){setEmailEnabled(false);return}
@@ -155,6 +190,11 @@ export default function App(){
     if(error)warn(error.message);else{setEmailEnabled(enabled);notify(enabled?'Avisos por correo habilitados.':'Avisos por correo desactivados.')}
   }
   useEffect(()=>{setProfileForm({display_name:currentProfile?.display_name??'',company_name:currentProfile?.company_name??'',bio:currentProfile?.bio??'',categories:currentProfile?.categories??[],service_localities:currentProfile?.service_localities??[]})},[currentProfile?.id, currentProfile?.display_name, currentProfile?.bio, currentProfile?.company_name, JSON.stringify(currentProfile?.categories), JSON.stringify(currentProfile?.service_localities)])
+  useEffect(()=>{
+    if(configured&&!loading&&userId&&currentProfile&&mode==='maestro'&&!currentProfile.is_professional&&screen!=='trabajos'){
+      goRoute('trabajos','maestro',null,null)
+    }
+  },[loading,userId,currentProfile?.id,currentProfile?.is_professional,mode,screen])
   useEffect(()=>{
     if(!supabase || !userId)return
     supabase.from('private_contacts').select('phone').eq('user_id',userId).maybeSingle().then(({data})=>setMyPhone(data?.phone??''))
@@ -231,15 +271,18 @@ export default function App(){
   }
   async function selectProfessional(j:Job,i:Interest){
     if(!requireUser())return
+    if(j.client_id!==currentId||j.status!=='open'||j.selected_pro_id){warn('No tienes autorización para seleccionar en esta solicitud.');return}
     await write(s=>({...s,jobs:s.jobs.map(x=>x.id===j.id?{...x,status:'matched',selected_pro_id:i.pro_id,client_contact_consent:false}:x)}),async()=>{
       const {error}=await supabase!.from('jobs').update({status:'matched',selected_pro_id:i.pro_id,client_contact_consent:false}).eq('id',j.id).eq('client_id',currentId!)
       if(error)throw error
     },'Profesional seleccionado. Ahora ambas partes podrán autorizar el contacto.')
   }
   async function clientConsent(j:Job){
+    if(!requireUser()||j.client_id!==currentId||!j.selected_pro_id){warn('No tienes autorización para cambiar este consentimiento.');return}
     await write(s=>({...s,jobs:s.jobs.map(x=>x.id===j.id?{...x,client_contact_consent:!x.client_contact_consent}:x)}),async()=>{const {error}=await supabase!.from('jobs').update({client_contact_consent:!j.client_contact_consent}).eq('id',j.id);if(error)throw error},j.client_contact_consent?'Permiso de contacto retirado.':'Autorizaste compartir tus datos con el profesional seleccionado.')
   }
   async function proConsent(i:Interest){
+    if(!requireUser()||!isPro||i.pro_id!==currentId){warn('Necesitas un perfil profesional activo para autorizar este contacto.');return}
     await write(s=>({...s,interests:s.interests.map(x=>x.id===i.id?{...x,pro_contact_consent:!x.pro_contact_consent}:x)}),async()=>{const {error}=await supabase!.from('interests').update({pro_contact_consent:!i.pro_contact_consent}).eq('id',i.id);if(error)throw error},i.pro_contact_consent?'Permiso de contacto retirado.':'Autorizaste compartir tus datos con este cliente.')
   }
   async function showContact(j:Job){
@@ -254,23 +297,26 @@ export default function App(){
     }catch(e){warn(`No se pudo mostrar el contacto: ${e instanceof Error?e.message:String(e)}`)}finally{setBusy(false)}
   }
   async function finishJob(j:Job){
+    if(!requireUser()||j.client_id!==currentId||j.status!=='matched'){warn('No tienes autorización para finalizar este trabajo.');return}
     await write(s=>({...s,jobs:s.jobs.map(x=>x.id===j.id?{...x,status:'completed'}:x)}),async()=>{const {error}=await supabase!.from('jobs').update({status:'completed'}).eq('id',j.id);if(error)throw error},'Trabajo marcado como finalizado. Ahora puedes dejar una evaluación.')
   }
   async function reviewJob(j:Job){
+    if(!requireUser()||j.client_id!==currentId||j.status!=='completed'||!j.selected_pro_id){warn('No tienes autorización para evaluar este trabajo.');return}
     if(reviewComment.trim().length<10){warn('Escribe una evaluación de al menos 10 caracteres.');return}
     const item:Review={id:demoId(),job_id:j.id,client_id:currentId!,pro_id:j.selected_pro_id!,rating:reviewRating,comment:reviewComment.trim(),created_at:new Date().toISOString()}
     await write(s=>({...s,reviews:[item,...s.reviews]}),async()=>{const {error}=await supabase!.from('reviews').insert({job_id:j.id,client_id:currentId,pro_id:j.selected_pro_id,rating:item.rating,comment:item.comment});if(error)throw error},'Gracias. Tu evaluación quedó registrada.',()=>setReviewComment(''))
   }
   async function saveProfile(e:FormEvent){
     e.preventDefault();if(!requireUser())return
-    const patch={display_name:profileForm.display_name.trim()||'Usuario ARAUKA',company_name:profileForm.company_name.trim()||null,bio:profileForm.bio.trim(),categories:profileForm.categories,service_localities:profileForm.service_localities,is_professional:mode==='maestro'||isPro}
+    const patch={display_name:profileForm.display_name.trim()||'Usuario ARAUKA',company_name:profileForm.company_name.trim()||null,bio:profileForm.bio.trim(),categories:profileForm.categories,service_localities:profileForm.service_localities,is_professional:isPro}
     await write(s=>({...s,profiles:s.profiles.map(x=>x.id===currentId?{...x,...patch}:x)}),async()=>{
       const {error}=await supabase!.from('profiles').update(patch).eq('id',currentId!);if(error)throw error
     },'Tu perfil fue actualizado.')
   }
   async function activatePro(){
     if(!requireUser())return
-    await write(s=>({...s,profiles:s.profiles.map(x=>x.id===currentId?{...x,is_professional:true}:x)}),async()=>{const {error}=await supabase!.from('profiles').update({is_professional:true}).eq('id',currentId!);if(error)throw error},'Tu perfil profesional está activado. Completa tus oficios y zonas de cobertura.')
+    const patch={is_professional:true}
+    await write(s=>({...s,profiles:s.profiles.map(x=>x.id===currentId?{...x,...patch}:x)}),async()=>{const {error}=await supabase!.from('profiles').update(patch).eq('id',currentId!);if(error)throw error},'Tu perfil profesional está activado.')
   }
   async function savePhone(e:FormEvent){
     e.preventDefault();if(!supabase||!userId)return
@@ -281,6 +327,7 @@ export default function App(){
   }
   async function uploadPortfolio(file:File){
     if(!supabase||!userId){warn('Para subir fotografías necesitas una cuenta real conectada a Supabase.');return}
+    if(!isPro){warn('Activa tu perfil profesional antes de subir trabajos.');return}
     if(!file.type.startsWith('image/') || file.size>5*1024*1024){warn('Selecciona una imagen JPG, PNG o WEBP de hasta 5 MB.');return}
     setBusy(true)
     try{
@@ -293,14 +340,14 @@ export default function App(){
       await refresh();notify('Fotografía agregada a tu portafolio.')
     }catch(e){warn(`No se pudo subir la fotografía: ${e instanceof Error?e.message:String(e)}`)}finally{setBusy(false)}
   }
-  const visiblePros=useMemo(()=>data.profiles.filter(p=>p.is_professional && (!filterCategory||p.categories.includes(filterCategory))&&(!filterLocality||p.service_localities.includes(filterLocality))&&(!filterQuery||(getName(p)+' '+p.categories.join(' ')+' '+p.bio).toLowerCase().includes(filterQuery.toLowerCase()))),[data.profiles,filterCategory,filterLocality,filterQuery])
+  const visiblePros=useMemo(()=>data.profiles.filter(p=>p.is_professional && (!filterCategory||p.categories.includes(filterCategory))&&(!filterLocality||p.service_localities.includes(filterLocality))&&(!filterQuery||(getPublicProfessionalName(p)+' '+p.categories.join(' ')+' '+p.bio).toLowerCase().includes(filterQuery.toLowerCase()))),[data.profiles,filterCategory,filterLocality,filterQuery])
   const verified=(id:string)=>data.verifications.find(v=>v.pro_id===id)
   const stars=(id:string)=>{const results=data.reviews.filter(r=>r.pro_id===id);if(!results.length)return null;return (results.reduce((n,r)=>n+r.rating,0)/results.length).toFixed(1).replace('.',',')}
   const imageUrl=(path:string)=>supabase?.storage.from('portfolio').getPublicUrl(path).data.publicUrl || ''
   const toggleList=(key:'categories'|'service_localities',value:string)=>setProfileForm(prev=>({...prev,[key]:prev[key].includes(value)?prev[key].filter(x=>x!==value):[...prev[key],value]}))
   const banner=<div className="trial-banner"><Sparkles size={16}/><span><strong>ARAUKA en lanzamiento.</strong> Clientes y profesionales participan gratis. No hay pagos ni comisiones.</span></div>
   function proCard(p:Profile){const score=stars(p.id);return <article className="pro-card" key={p.id}>
-    <div className="pro-top"><div className="pro-icon"><CategoryIcon category={p.categories[0]||''} size={26}/></div><div className="pro-overview"><div className="name-row"><h3>{getName(p)}</h3>{verified(p.id)?.identity_verified&&<span className="verified"><ShieldCheck size={13}/> Identidad verificada</span>}</div><p>{p.categories.slice(0,3).join(' · ')}</p><div className="muted tiny"><MapPin size={13}/>{p.service_localities.join(', ')||'Zonas por definir'}</div></div></div>
+    <div className="pro-top"><div className="pro-icon"><CategoryIcon category={p.categories[0]||''} size={26}/></div><div className="pro-overview"><div className="name-row"><h3>{getPublicProfessionalName(p)}</h3>{verified(p.id)?.identity_verified&&<span className="verified"><ShieldCheck size={13}/> Identidad verificada</span>}</div><p>{p.categories.slice(0,3).join(' · ')}</p><div className="muted tiny"><MapPin size={13}/>{p.service_localities.join(', ')||'Zonas por definir'}</div></div></div>
     <p className="pro-blurb">{p.bio||'Profesional en ARAUKA. Consulta sus especialidades y trabajos.'}</p>
     <div className="card-foot"><span className="muted tiny">{score?<><Star size={13} fill="currentColor"/> {score} · {data.reviews.filter(r=>r.pro_id===p.id).length} evaluaciones</>:<><CircleHelp size={13}/> Sin evaluaciones todavía</>}</span><button className="btn btn-soft btn-sm" onClick={()=>{goRoute('profesional',mode,null,p.id)}}>Ver perfil <ArrowRight size={15}/></button></div>
   </article>}
