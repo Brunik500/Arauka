@@ -15,3 +15,60 @@ html[data-arauka-mode='cliente'] .auth-modal>p:before{content:'Panel Cliente · 
 .notification-item{display:flex;flex-direction:column;text-align:left;width:100%;padding:14px 12px;background:white;border:1px solid #e0eae5;border-radius:10px;margin:9px 0;gap:5px;cursor:pointer;color:#26594c}
 .notification-item span{font-size:12px;color:#617f75}.notification-item small{color:#829c91}.notification-item.unread{border-left:4px solid #0e9974;background:#f3fcf7}
 @media(max-width:760px){.current-role{padding:8px;font-size:11px}.current-role .muted{display:none}.experience-entry{padding:24px 15px}.entry-logo{margin-bottom:30px}.experience-options{grid-template-columns:1fr}.experience-option{padding:19px}.experience-copy h1{font-size:34px}.experience-copy p{font-size:13px}}
+
+/* v0.9: el acento visible identifica la experiencia activa. */
+:root[data-arauka-mode="maestro"]{--experience-accent:#2563a7;--experience-soft:#e8f1fb;--experience-dark:#173f70}
+:root[data-arauka-mode="empresa"]{--experience-accent:#7551a6;--experience-soft:#f0eafb;--experience-dark:#49316d}
+:root[data-arauka-mode="cliente"]{--experience-accent:#118875;--experience-soft:#e5f4ee;--experience-dark:#123d40}
+:root[data-arauka-mode] .topbar{border-top:4px solid var(--experience-accent)}
+:root[data-arauka-mode] .toplink.active:after,:root[data-arauka-mode] .btn-primary{background:var(--experience-accent)}
+:root[data-arauka-mode] .current-role,:root[data-arauka-mode] .eyebrow,:root[data-arauka-mode] .bottom-nav button.active{color:var(--experience-accent)}
+:root[data-arauka-mode] .current-role,:root[data-arauka-mode] .account-avatar{background:var(--experience-soft)}
+:root[data-arauka-environment^="staging"] body:before{content:'STAGING  ·  MODO DE PRUEBA  ·  DATOS DE ENSAYO';position:fixed;inset:0 0 auto;z-index:100;height:28px;display:grid;place-items:center;background:#34224f;color:#fff;font:800 10px/1 Manrope,system-ui;letter-spacing:.16em;box-shadow:0 1px 5px #25193635}
+:root[data-arauka-environment="staging-error"] body:before{content:'STAGING  ·  CONEXIÓN BLOQUEADA POR CONFIGURACIÓN INVÁLIDA';background:#9b3e34}
+:root[data-arauka-environment^="staging"] .site{padding-top:28px}:root[data-arauka-environment^="staging"] .topbar{top:28px}
+:root[data-arauka-environment^="staging"] .experience-entry{padding-top:58px}
+:root[data-arauka-mode] .hero{background:var(--experience-dark)}
+:root[data-arauka-mode="maestro"] .hero-decoration{background:radial-gradient(circle at 60% 50%,#3e72a8 0%,#245587 52%,#173f70 77%)}
+:root[data-arauka-mode="empresa"] .hero-decoration{background:radial-gradient(circle at 60% 50%,#8665ad 0%,#65468d 52%,#49316d 77%)}
+:root[data-arauka-mode] .hero h1 em,:root[data-arauka-mode] .hero-kicker{color:#fff}:root[data-arauka-mode] .pulse-dot{background:#fff;box-shadow:0 0 0 5px #ffffff24}
+:root[data-arauka-mode] .btn-soft{color:var(--experience-accent);background:var(--experience-soft)}
+:root[data-arauka-mode] .form-card,:root[data-arauka-mode] .detail-card,:root[data-arauka-mode] .empty{border-top:3px solid color-mix(in srgb,var(--experience-accent) 45%,white)}
+:root[data-arauka-mode] .field input:focus,:root[data-arauka-mode] .field textarea:focus,:root[data-arauka-mode] .field select:focus{border-color:var(--experience-accent);box-shadow:0 0 0 3px color-mix(in srgb,var(--experience-accent) 16%,transparent)}
+:root[data-arauka-mode] .field input:user-invalid,:root[data-arauka-mode] .field textarea:user-invalid,:root[data-arauka-mode] .field select:user-invalid{border-color:#b84f43;box-shadow:0 0 0 3px #b84f4318}
+:root[data-arauka-mode] .btn:disabled{cursor:wait;opacity:.62}.form-error{border-left:3px solid #b84f43;background:#fff4f2;padding:10px 12px;border-radius:7px}.empty svg{color:var(--experience-accent)}
+.top-caption:before{border-radius:99px;padding:5px 10px;background:var(--experience-soft);color:var(--experience-accent);font-weight:900}.top-caption:before{content:'Panel Cliente'}:root[data-arauka-mode="maestro"][data-arauka-profile-kind="professional"] .top-caption:before{content:'Panel Profesional independiente'}:root[data-arauka-mode="maestro"][data-arauka-profile-kind="business"] .top-caption:before{content:'Panel Negocio independiente'}:root[data-arauka-mode="empresa"] .top-caption:before{content:'Panel Empresa'}
+:root[data-arauka-mode="maestro"] section.page.narrow:has(.account-heading)>.page-heading h1{font-size:0}:root[data-arauka-mode="maestro"] section.page.narrow:has(.account-heading)>.page-heading h1:before{content:'Mi perfil profesional';font-size:36px}:root[data-arauka-mode="maestro"][data-arauka-profile-kind="business"] section.page.narrow:has(.account-heading)>.page-heading h1:before{content:'Mi negocio independiente'}
+:root[data-arauka-mode="maestro"] section.page:has(.mini-metrics)>.page-heading .eyebrow{font-size:0}:root[data-arauka-mode="maestro"] section.page:has(.mini-metrics)>.page-heading .eyebrow:before{content:'PANEL PROFESIONAL INDEPENDIENTE';font-size:11px}:root[data-arauka-mode="maestro"][data-arauka-profile-kind="business"] section.page:has(.mini-metrics)>.page-heading .eyebrow:before{content:'PANEL NEGOCIO INDEPENDIENTE'}
+.pro-hero .eyebrow{font-size:0}.pro-hero .eyebrow:before{content:'PERFIL DE SERVICIOS';font-size:11px}
+.pro-hero~.notice:not(.friendly){display:none}
+.four-options{grid-template-columns:repeat(2,minmax(0,1fr))}
+.company-option .experience-icon{background:#f0eafb;color:#7551a6}
+.selector-account{margin:24px auto 0;display:flex}
+.experience-switcher{display:flex;gap:9px;flex-wrap:wrap}.primary-action{margin-top:18px}.experience-manager{border-top:4px solid var(--experience-accent)}
+.experience-manager>h2{margin-top:7px}.experience-switcher .btn[aria-pressed="true"]{opacity:1;cursor:default;box-shadow:0 0 0 3px color-mix(in srgb,var(--experience-accent) 18%,transparent)}.primary-note{display:flex;align-items:center;gap:7px;color:var(--experience-accent);font-size:12px;font-weight:800;margin:16px 0 0}.activation-option{border-top:1px solid #e5ece8;margin-top:22px;padding-top:18px;display:flex;align-items:center;justify-content:space-between;gap:15px}.activation-option p{margin:0;font-size:13px}.activation-option .muted{font-size:12px}
+.confirmation-page{min-height:100vh;display:grid;place-items:center;padding:58px 18px;background:radial-gradient(circle at top,var(--experience-soft),#f7f9f8 55%)}.confirmation-card{width:min(610px,100%);background:#fff;border:1px solid #dfe9e4;border-top:5px solid var(--experience-accent);border-radius:24px;padding:36px;box-shadow:0 24px 70px #173d3220;text-align:center}.confirmation-logo{margin:0 auto 30px}.confirmation-icon{width:68px;height:68px;border-radius:50%;display:grid;place-items:center;margin:0 auto 18px;background:var(--experience-soft);color:var(--experience-accent)}.confirmation-card h1{font-size:34px;margin:9px 0 15px}.confirmation-card>p{color:#607b74}.confirmation-card .notice{text-align:left}.confirmation-actions{display:flex;justify-content:center;gap:10px;flex-wrap:wrap;margin-top:22px}.confirmation-feedback{background:#eef8f3;border-radius:10px;padding:11px 13px;color:#276b58!important;font-size:12px;font-weight:700}.confirmation-card .form-small{margin-top:17px}
+.account-pill{display:none}
+.privacy-account{border-color:#f0d4d0}.privacy-account h2{display:flex;align-items:center;gap:8px}.danger-action{background:#9f332b;color:#fff}.danger-action:hover:not(:disabled){background:#81271f}.danger-icon{color:#a33a31}.retention-notice{background:#fff5ef;border:1px solid #f1d7cb;border-radius:11px;padding:12px;color:#75453c;font-size:13px}.deletion-actions{display:flex;justify-content:flex-end;gap:10px;margin-top:18px}.deletion-dialog{max-height:calc(100vh - 30px);overflow:auto}
+.activation-card{border-top:5px solid #2563a7;background:linear-gradient(180deg,#f7fbff 0,#fff 160px)}.activation-card h2{margin-top:7px}.activation-actions{display:flex;gap:10px;flex-wrap:wrap;margin:22px 0}.activation-card .notice{margin-bottom:0}
+.activation-launcher{border-top:4px solid #2563a7}.activation-launcher h2{margin-top:7px}
+/* El formulario historico usa profiles, pero cada panel expone y escribe solo su subconjunto. */
+:root[data-arauka-mode="cliente"] form.form-card:has(>h2:first-child + label.field + label.field + label.field)>label.field:nth-of-type(n+2),
+:root[data-arauka-mode="cliente"] form.form-card:has(>h2:first-child + label.field + label.field + label.field)>h3,
+:root[data-arauka-mode="cliente"] form.form-card:has(>h2:first-child + label.field + label.field + label.field)>.check-grid{display:none}
+:root[data-arauka-mode="maestro"] form.form-card:has(>h2:first-child + label.field + label.field + label.field)>label.field:first-of-type{display:none}
+:root[data-arauka-mode="maestro"][data-arauka-profile-kind="professional"] form.form-card:has(>h2:first-child + label.field + label.field + label.field)>label.field:nth-of-type(2){display:none}
+:root[data-arauka-mode="empresa"] form.form-card:has(>h2:first-child + label.field + label.field + label.field){display:none}
+:root[data-arauka-mode="cliente"] div.form-card:has(>h2:first-child + p.muted + label.upload-btn),
+:root[data-arauka-mode="empresa"] div.form-card:has(>h2:first-child + p.muted + label.upload-btn){display:none}
+.company-registration{border-top:5px solid #7551a6;background:linear-gradient(180deg,#fcfaff 0,#fff 150px)}
+.company-form-heading{display:flex;align-items:flex-start;justify-content:space-between;gap:18px;margin-bottom:16px}.company-form-heading h2{margin:6px 0 0}
+.company-status{display:inline-flex;align-items:center;gap:5px;border-radius:999px;padding:8px 11px;font-size:11px;font-weight:800;white-space:nowrap;background:#f1edf7;color:#684690}.company-status.status-verified{background:#e5f7ec;color:#187653}.company-status.status-rejected{background:#fff0ed;color:#9d4939}
+.privacy-label,.public-label{display:inline-flex;margin-left:6px;border-radius:999px;padding:4px 8px;font-size:9px;text-transform:uppercase;letter-spacing:.08em;vertical-align:middle}.privacy-label{background:#eeeaf4;color:#60467e}.public-label{background:#e7f6ef;color:#16765d}
+.field-wide{grid-column:1/-1}.field small{font-weight:500;color:#879a94}.company-documents h2{display:flex;align-items:center;gap:8px}.document-list{list-style:none;margin:16px 0 0;padding:0;display:grid;gap:8px}.document-list li{display:grid;grid-template-columns:auto 1fr auto;align-items:center;gap:9px;padding:11px 13px;background:#f7f4fb;border:1px solid #ebe4f3;border-radius:10px;color:#5c4772;font-size:12px}.document-list small{color:#8b7b99}
+@media(max-width:760px){.four-options{grid-template-columns:1fr}:root[data-arauka-environment^="staging"] body:before{font-size:8px;letter-spacing:.1em}:root[data-arauka-environment^="staging"] .site{padding-top:28px}.top-caption{flex-wrap:wrap;padding:5px 0}}
+@media(max-width:760px){.company-form-heading{flex-direction:column}.company-status{white-space:normal}.field-wide{grid-column:auto}.document-list li{grid-template-columns:auto 1fr}.document-list small{grid-column:2}}
+@media(max-width:760px){.experience-switcher{display:grid;grid-template-columns:1fr}.experience-switcher .btn{width:100%}.activation-option{align-items:stretch;flex-direction:column}.activation-option .btn{width:100%}}
+@media(max-width:760px){.confirmation-page{padding:46px 14px 24px}.confirmation-card{padding:25px 18px;border-radius:18px}.confirmation-card h1{font-size:28px}.confirmation-actions{display:grid}.confirmation-actions .btn{width:100%}}
+.password-field{position:relative}.password-field input{padding-right:56px}.password-toggle{position:absolute;right:3px;top:50%;transform:translateY(-50%);width:44px;height:44px;border:0;border-radius:9px;background:transparent;color:#607c74;display:grid;place-items:center}.password-toggle:hover{background:var(--experience-soft);color:var(--experience-accent)}.password-toggle:focus-visible{outline:3px solid color-mix(in srgb,var(--experience-accent) 28%,transparent);outline-offset:1px}
+@media(max-width:760px){.auth-modal{max-height:calc(100dvh - 30px);overflow-y:auto}.password-toggle{width:46px;height:46px}.password-field input{padding-right:58px}}

@@ -1,16 +1,22 @@
 import { useCallback, useEffect, useMemo, useState, type FormEvent } from 'react'
-import { ArrowLeft, ArrowRight, Bell, BriefcaseBusiness, Check, CheckCircle2, ChevronRight, Clock3, Compass, Hammer, HeartHandshake, LayoutDashboard, LockKeyhole, LogIn, LogOut, MapPin, Menu, MessageCircle, Plus, Search, ShieldCheck, SlidersHorizontal, Sparkles, Star, UserCircle2, Users, X, ImagePlus, Phone, CircleHelp } from 'lucide-react'
-import { supabase, configured } from './lib/supabase'
-import { CATEGORIES, LOCALITIES, type Job, type Interest, type Mode, type Page, type Portfolio, type Profile, type Review, type Verification } from './lib/types'
+import { ArrowLeft, ArrowRight, Bell, BriefcaseBusiness, Check, CheckCircle2, ChevronRight, Clock3, Compass, Eye, EyeOff, Hammer, HeartHandshake, LayoutDashboard, LockKeyhole, LogIn, LogOut, MapPin, Menu, MessageCircle, Plus, Search, ShieldCheck, SlidersHorizontal, Sparkles, Star, UserCircle2, Users, X, ImagePlus, Phone, CircleHelp } from 'lucide-react'
+import { supabase, configured, configurationError, isStaging } from './lib/supabase'
+import { CATEGORIES, LOCALITIES, type CommercialProfile, type CompanyDocument, type Experience, type Job, type Interest, type Mode, type Page, type Portfolio, type Profile, type Review, type Verification } from './lib/types'
+import { canUseExperience, experienceLabel, experienceNavigationMessage, experiencePanelLabel, legacyExperiences, primaryExperience, validateProfessionalActivation } from './lib/identity'
+import { isValidRut, normalizeRut } from './lib/rut'
+import { profilePatchForExperience } from './lib/profileForms'
+import { loginErrorMessage, resendErrorMessage, safeAuthDiagnostic, signupErrorMessage } from './lib/authUx'
+import { modeForRegistrationChoice, registrationChoiceForMode, registrationChoiceLabel, registrationMetadata, type RegistrationChoice } from './lib/registration'
+import {AccountDeletionPanel} from './components/AccountDeletionPanel'
 
 type Store = { profiles: Profile[]; jobs: Job[]; interests: Interest[]; reviews: Review[]; portfolio: Portfolio[]; verifications: Verification[] }
 type Screen = Page | 'profesional' | 'detalle'
 type NotificationItem = { id:string; recipient_id:string; job_id:string|null; kind:string; title:string; body:string; read_at:string|null; created_at:string }
 const allowedScreens:Screen[]=['inicio','buscar','publicar','trabajos','cuenta','detalle','profesional']
-const hasExperienceRoute=()=>/^#\/(cliente|maestro)(?:\/|$)/.test(location.hash)
+const hasExperienceRoute=()=>/^#\/(cliente|maestro|empresa)(?:\/|$)/.test(location.hash)
 function parseRoute(){
   const path=location.hash.startsWith('#/')?location.hash.slice(2).split('/').filter(Boolean):[]
-  const role:Mode=path[0]==='maestro'?'maestro':'cliente'
+  const role:Mode=path[0]==='maestro'||path[0]==='empresa'?path[0]:'cliente'
   const route=path[1]??'inicio'
   const view:Screen=route==='trabajo'?'detalle':route==='pro'?'profesional':allowedScreens.includes(route as Screen)?route as Screen:'inicio'
   return {mode:role,screen:view,jobId:route==='trabajo'?path[2]??null:null,proId:route==='pro'?path[2]??null:null}
@@ -28,7 +34,7 @@ const initialDemo: Store = {
     {id:demoClient,display_name:'Cliente de prueba',company_name:null,bio:'',is_professional:false,categories:[],service_localities:[]},
     {id:demoPro,display_name:'Equipo NOBRO',company_name:'NOBRO',bio:'Acero, madera y diseño. Fabricación de portones, estructuras y mobiliario a medida.',is_professional:true,categories:['Portones','Carpintería','Construcción','Muebles'],service_localities:['Villarrica','Pucón','Lican Ray']},
     {id:'demo-limpieza',display_name:'Equipo de limpieza',company_name:'Limpieza local · ejemplo',bio:'Perfil ficticio para probar la categoría Limpieza. Pendiente de incorporar una empresa real con su autorización.',is_professional:true,categories:['Limpieza'],service_localities:['Villarrica','Pucón']},
-    {id:'demo-tecnico',display_name:'Profesional de ejemplo',company_name:null,bio:'Perfil de prueba sin validación de identidad ni credenciales.',is_professional:true,categories:['Electricidad','Gasfitería'],service_localities:['Panguipulli','Coñaripe']},
+    {id:'demo-tecnico',display_name:'Profesional de ejemplo',company_name:null,bio:'Perfil de prueba para presentar servicios de electricidad y gasfitería.',is_professional:true,categories:['Electricidad','Gasfitería'],service_localities:['Panguipulli','Coñaripe']},
     {id:'demo-otrocliente',display_name:'Vecino de ejemplo',company_name:null,bio:'',is_professional:false,categories:[],service_localities:[]}
   ],
   jobs: [{ id:'demo-trabajo-1',client_id:'demo-otrocliente',title:'Reparación de portón metálico',description:'Necesito revisar las ruedas y el deslizamiento de un portón corredera. Se pueden enviar fotos al coordinar.',category:'Portones',locality:'Villarrica',status:'open',selected_pro_id:null,client_contact_consent:false,created_at:new Date().toISOString() }],
@@ -45,6 +51,7 @@ function statusName(status:Job['status']) {return ({open:'Publicado',matched:'Pr
 const getPublicProfessionalName=(p?:Profile)=> p?.company_name?.trim() || p?.display_name || 'Profesional'
 const getAccountName=(p?:Profile)=>p?.display_name || 'Usuario ARAUKA'
 function emptyForm() { return { title:'', description:'', category:'', locality:'Villarrica' } }
+const emptyCompanyForm={legal_name:'',tax_id:'',legal_type:'',public_name:'',economic_activity:'',tax_address:'',municipality:'',region:'',representative_name:'',contact_email:'',business_phone:'',services:'',coverage:''}
 export default function App(){
   const [mode,setMode]=useState<Mode>(()=>parseRoute().mode)
   const [screen,setScreen]=useState<Screen>(()=>parseRoute().screen)
@@ -53,6 +60,8 @@ export default function App(){
   const [userId,setUserId]=useState<string|null>(configured ? null : demoClient)
   const [authOpen,setAuthOpen]=useState(false)
   const [authKind,setAuthKind]=useState<AuthKind>('registro')
+  const [registrationChoice,setRegistrationChoice]=useState<RegistrationChoice>('client')
+  const [experiences,setExperiences]=useState<Experience[]>(configured?[]:legacyExperiences(initialDemo.profiles[0]))
   const [experienceChosen,setExperienceChosen]=useState(hasExperienceRoute)
   const [busy,setBusy]=useState(false)
   const [loading,setLoading]=useState(configured)
@@ -75,7 +84,19 @@ export default function App(){
   const [allNotifications,setNotifications]=useState<NotificationItem[]>([])
   const [emailEnabled,setEmailEnabled]=useState(false)
   const [authFields,setAuthFields]=useState({name:'',email:'',password:''})
+  const [confirmPassword,setConfirmPassword]=useState('')
+  const [showPassword,setShowPassword]=useState(false)
+  const [showConfirmPassword,setShowConfirmPassword]=useState(false)
+  const [pendingConfirmationEmail,setPendingConfirmationEmail]=useState<string|null>(null)
+  const [pendingConfirmationChoice,setPendingConfirmationChoice]=useState<RegistrationChoice|null>(null)
+  const [resendCooldown,setResendCooldown]=useState(0)
+  const [resendMessage,setResendMessage]=useState('')
   const [profileForm,setProfileForm]=useState({display_name:'',company_name:'',bio:'',categories:[] as string[],service_localities:[] as string[]})
+  const [activationOpen,setActivationOpen]=useState(false)
+  const [companyProfile,setCompanyProfile]=useState<CommercialProfile|null>(null)
+  const [companyDocuments,setCompanyDocuments]=useState<CompanyDocument[]>([])
+  const [companyForm,setCompanyForm]=useState({...emptyCompanyForm})
+  const [verifiedCompanyIds,setVerifiedCompanyIds]=useState<string[]>([])
   const data = configured ? store : demo
   const currentId = configured ? userId : mode==='cliente'?demoClient:demoPro
   const currentProfile=data.profiles.find(p=>p.id===currentId)
@@ -87,7 +108,11 @@ export default function App(){
   const myJobs=data.jobs.filter(j=>j.client_id===currentId).sort((a,b)=>b.created_at.localeCompare(a.created_at))
   const myInterests=data.interests.filter(i=>i.pro_id===currentId)
   const openOpportunities=data.jobs.filter(j=>j.status==='open' && j.client_id!==currentId && (!currentProfile?.categories.length || currentProfile.categories.includes(j.category)) && (!currentProfile?.service_localities.length || currentProfile.service_localities.includes(j.locality)))
-  const modeDescription = mode === 'cliente' ? 'Encuentra soluciones cerca de ti' : 'Conecta con nuevas oportunidades'
+  const activeExperience=experiences.find(item=>item.experience===mode)
+  const activeIdentityLabel=activeExperience?experiencePanelLabel(activeExperience):mode==='cliente'?'Cliente':mode==='empresa'?'Empresa':registrationChoice==='business'?'Negocio independiente':'Profesional independiente'
+  const modeLabel=(_:Mode)=>activeIdentityLabel
+  const modeDescription = mode === 'cliente' ? 'Encuentra soluciones cerca de ti' : mode==='empresa'?'Servicios y contratación con identidad empresarial':activeExperience?.profile_kind==='business'?'Gestiona tu negocio y conecta con oportunidades':'Presenta tu experiencia y conecta con oportunidades'
+  const canActivateOffering=experiences.some(item=>item.experience==='cliente')&&!experiences.some(item=>item.experience==='empresa')&&!experiences.some(item=>item.experience==='maestro')
   const notificationExperience=(notice:NotificationItem):Mode|null=>{
     if(notice.kind==='interest')return 'cliente'
     if(notice.kind==='selected')return 'maestro'
@@ -114,13 +139,17 @@ export default function App(){
   const navigate=(next:Screen)=>goRoute(next)
   function applyRoute(){const route=parseRoute();if(hasExperienceRoute())setExperienceChosen(true);setMode(route.mode);setScreen(route.screen);setSelectedJob(route.jobId);setSelectedPro(route.proId)}
   useEffect(()=>{const handle=()=>{applyRoute();setContactResult(null)};window.addEventListener('hashchange',handle);return ()=>window.removeEventListener('hashchange',handle)},[])
-  useEffect(()=>{document.documentElement.dataset.araukaMode=mode},[mode])
-  function changeRole(role:Mode){goRoute(screen,role,selectedJob,selectedPro)}
-  function chooseExperience(role:Mode){goRoute('inicio',role,null,null);requestAuth('registro')}
-  const requestAuth=(kind:AuthKind='registro')=>{setAuthKind(kind);setAuthOpen(true);setError('');setMessage('')}
+  useEffect(()=>{document.documentElement.dataset.araukaMode=mode;document.documentElement.dataset.araukaProfileKind=activeExperience?.profile_kind??'';document.documentElement.dataset.araukaEnvironment=configurationError?'staging-error':isStaging?'staging':'local';document.title=isStaging||configurationError?'ARAUKA · Staging':'ARAUKA'},[mode,activeExperience?.profile_kind])
+  useEffect(()=>{if(resendCooldown<=0)return;const timer=window.setInterval(()=>setResendCooldown(value=>Math.max(0,value-1)),1000);return()=>window.clearInterval(timer)},[resendCooldown>0])
+  function changeRole(role:Mode){if(configured&&userId&&!canUseExperience(experiences,role)){goRoute('cuenta',role,null,null);return}goRoute('inicio',role,null,null)}
+  function chooseExperience(role:Mode,choice:RegistrationChoice='client'){goRoute('inicio',role,null,null);requestAuth('registro',choice)}
+  const resetAuthSecrets=()=>{setAuthFields(fields=>({...fields,password:''}));setConfirmPassword('');setShowPassword(false);setShowConfirmPassword(false)}
+  const closeAuth=()=>{resetAuthSecrets();setAuthOpen(false);setError('')}
+  const changeAuthKind=(kind:AuthKind)=>{if(kind==='registro')setRegistrationChoice(current=>registrationChoiceForMode(mode,current));setAuthKind(kind);setConfirmPassword('');setShowPassword(false);setShowConfirmPassword(false);setError('')}
+  const requestAuth=(kind:AuthKind='registro',choice?:RegistrationChoice)=>{resetAuthSecrets();setRegistrationChoice(current=>choice??registrationChoiceForMode(mode,current));setAuthKind(kind);setAuthOpen(true);setError('');setMessage('')}
   const requireUser=()=>{if(!signedIn){requestAuth('registro');return false} return true}
   const clearUserState=()=>{
-    setStore(initialDemo);setNotifications([]);setEmailEnabled(false);setMyPhone('');setContactResult(null)
+    setStore(initialDemo);setExperiences([]);setNotifications([]);setEmailEnabled(false);setMyPhone('');setContactResult(null)
     setSelectedJob(null);setSelectedPro(null);setEditingJobId(null);setJobError('');setAuthFields({name:'',email:'',password:''})
   }
   const resetToExperienceSelector=()=>{
@@ -140,17 +169,23 @@ export default function App(){
   const refresh = useCallback(async ()=>{
     if(!supabase) return
     const {data:{user}}=await supabase.auth.getUser()
-    const [p,j,i,r,pt,v]=await Promise.all([
+    const [p,j,i,r,pt,v,x,vc]=await Promise.all([
       supabase.from('profiles').select('*'),supabase.from('jobs').select('*'),
       user ? supabase.from('interests').select('*') : Promise.resolve({data:[],error:null}),
       supabase.from('reviews').select('*'),supabase.from('portfolio').select('*'),
-      supabase.from('verifications').select('*')
+      supabase.from('verifications').select('*'),
+      user ? supabase.from('my_account_experiences').select('*') : Promise.resolve({data:[],error:null}),
+      supabase.from('verified_companies').select('user_id')
     ])
     const failure=[p,j,i,r,pt,v].find(x=>x.error)?.error
     if(failure) throw failure
     const {data:{user:latestUser}}=await supabase.auth.getUser()
     if(latestUser?.id!==user?.id)return
-    setStore({profiles:p.data as Profile[] ?? [],jobs:j.data as Job[] ?? [],interests:i.data as Interest[] ?? [],reviews:r.data as Review[] ?? [],portfolio:pt.data as Portfolio[] ?? [],verifications:v.data as Verification[] ?? []})
+    const profiles=p.data as Profile[] ?? []
+    setStore({profiles,jobs:j.data as Job[] ?? [],interests:i.data as Interest[] ?? [],reviews:r.data as Review[] ?? [],portfolio:pt.data as Portfolio[] ?? [],verifications:v.data as Verification[] ?? []})
+    const own=profiles.find(profile=>profile.id===user?.id)
+    setExperiences(x.error?legacyExperiences(own):(x.data as Experience[]??[]))
+    setVerifiedCompanyIds(vc.error?[]:(vc.data??[]).map(item=>item.user_id as string))
   },[])
   useEffect(()=>{
     if(!supabase) return
@@ -164,6 +199,11 @@ export default function App(){
     return ()=>{active=false;subscription.unsubscribe()}
   },[])
   useEffect(()=>{if(!configured)return;setLoading(true);refresh().catch(e=>setError(`No se pudieron cargar los datos: ${e.message}`)).finally(()=>setLoading(false))},[refresh,userId])
+  useEffect(()=>{
+    if(!configured||loading||!userId||!experiences.length)return
+    const primary=primaryExperience(experiences)
+    if((!canUseExperience(experiences,mode)||!hasExperienceRoute())&&primary)goRoute('inicio',primary,null,null)
+  },[loading,userId,experiences])
   useEffect(()=>{
     if(!supabase||!userId){setNotifications([]);return}
     const client=supabase
@@ -191,14 +231,30 @@ export default function App(){
   }
   useEffect(()=>{setProfileForm({display_name:currentProfile?.display_name??'',company_name:currentProfile?.company_name??'',bio:currentProfile?.bio??'',categories:currentProfile?.categories??[],service_localities:currentProfile?.service_localities??[]})},[currentProfile?.id, currentProfile?.display_name, currentProfile?.bio, currentProfile?.company_name, JSON.stringify(currentProfile?.categories), JSON.stringify(currentProfile?.service_localities)])
   useEffect(()=>{
-    if(configured&&!loading&&userId&&currentProfile&&mode==='maestro'&&!currentProfile.is_professional&&screen!=='trabajos'){
-      goRoute('trabajos','maestro',null,null)
-    }
-  },[loading,userId,currentProfile?.id,currentProfile?.is_professional,mode,screen])
-  useEffect(()=>{
     if(!supabase || !userId)return
     supabase.from('private_contacts').select('phone').eq('user_id',userId).maybeSingle().then(({data})=>setMyPhone(data?.phone??''))
   },[userId])
+  useEffect(()=>{
+    if(!supabase||!userId||!experiences.some(item=>item.experience==='empresa')){setCompanyProfile(null);setCompanyDocuments([]);setCompanyForm({...emptyCompanyForm});return}
+    let active=true
+    Promise.all([
+      supabase.from('commercial_profiles').select('*').eq('user_id',userId).maybeSingle(),
+      supabase.from('company_documents').select('*').eq('user_id',userId).order('created_at',{ascending:false})
+    ]).then(([profile,documents])=>{
+      if(!active)return
+      if(profile.error){warn(profile.error.message);return}
+      const value=profile.data as CommercialProfile|null
+      setCompanyProfile(value)
+      setCompanyDocuments(documents.data as CompanyDocument[]??[])
+      setCompanyForm(value?{
+        legal_name:value.legal_name??'',tax_id:value.tax_id??'',legal_type:value.legal_type??'',public_name:value.public_name??'',
+        economic_activity:value.economic_activity??'',tax_address:value.tax_address??'',municipality:value.municipality??'',region:value.region??'',
+        representative_name:value.representative_name??'',contact_email:value.contact_email??'',business_phone:value.business_phone??'',
+        services:value.services.join(', '),coverage:value.coverage.join(', ')
+      }:{...emptyCompanyForm})
+    })
+    return()=>{active=false}
+  },[userId,experiences.some(item=>item.experience==='empresa')])
 
   async function write(demoMutation:(s:Store)=>Store, remoteAction:()=>Promise<void>, success:string, after?:()=>void){
     if(busy)return
@@ -211,20 +267,53 @@ export default function App(){
   }
   async function authenticate(e:FormEvent){
     e.preventDefault();if(!supabase)return
+    if(authKind==='registro'&&authFields.password!==confirmPassword){setError('Las contraseñas no coinciden');return}
     setBusy(true);setError('')
     try{
+      const email=authFields.email.trim()
       if(authKind==='registro'){
-        const {data,error}=await supabase.auth.signUp({email:authFields.email.trim(),password:authFields.password,options:{data:{display_name:authFields.name.trim()||'Usuario ARAUKA'}}})
+        const submittedChoice=registrationChoice
+        const signupMetadata=registrationMetadata(submittedChoice,authFields.name)
+        const {data,error}=await supabase.auth.signUp({email,password:authFields.password,options:{data:signupMetadata}})
         if(error)throw error
         setAuthOpen(false)
-        if(!data.session)notify('Revisa tu correo para confirmar el registro. Después podrás ingresar a ARAUKA.')
-        else {goRoute('inicio',mode,null,null);notify(`Cuenta creada. Entraste al Panel ${mode==='cliente'?'Cliente':'Maestro'}.`);await refresh()}
+        resetAuthSecrets()
+        if(!data.session){setPendingConfirmationEmail(email);setPendingConfirmationChoice(submittedChoice);setResendCooldown(0);setResendMessage('')}
+        else {setPendingConfirmationEmail(null);setPendingConfirmationChoice(null);goRoute('inicio',modeForRegistrationChoice(submittedChoice),null,null);notify(`Cuenta creada. Entraste al Panel ${registrationChoiceLabel(submittedChoice)}.`);await refresh()}
       } else {
-        const {error}=await supabase.auth.signInWithPassword({email:authFields.email.trim(),password:authFields.password})
+        const {data,error}=await supabase.auth.signInWithPassword({email,password:authFields.password})
         if(error)throw error
-        setAuthOpen(false);goRoute('inicio',mode,null,null);notify(`Sesión iniciada en el Panel ${mode==='cliente'?'Cliente':'Maestro'}.`)
+        const initialExperience=data.user?.user_metadata?.initial_experience
+        if(initialExperience==='company'){
+          const activation=await supabase.rpc('complete_initial_company_activation')
+          if(activation.error)throw activation.error
+          await refresh()
+        }
+        const destination=initialExperience==='company'?'empresa':mode
+        setPendingConfirmationEmail(null);setPendingConfirmationChoice(null);setAuthOpen(false);resetAuthSecrets();goRoute('inicio',destination,null,null);notify(`Sesión iniciada en el Panel ${initialExperience==='company'?'Empresa':activeIdentityLabel}.`)
       }
-    }catch(e){setError(`No se pudo ingresar: ${e instanceof Error?e.message:String(e)}`)}finally{setBusy(false)}
+    }catch(e){
+      if(authKind==='registro'){
+        if(import.meta.env.DEV)console.warn('[ARAUKA auth]',safeAuthDiagnostic('signup',e))
+        setError(signupErrorMessage(e))
+      }else setError(loginErrorMessage(e))
+    }finally{setBusy(false)}
+  }
+  async function resendConfirmation(){
+    if(!supabase||!pendingConfirmationEmail||busy||resendCooldown>0)return
+    setBusy(true);setResendMessage('');setResendCooldown(60)
+    try{
+      const {error}=await supabase.auth.resend({type:'signup',email:pendingConfirmationEmail})
+      if(error){
+        if(import.meta.env.DEV)console.warn('[ARAUKA auth]',safeAuthDiagnostic('resend',error))
+        setResendMessage(resendErrorMessage())
+        return
+      }
+      setResendMessage('Procesamos tu solicitud. Si la cuenta está pendiente de confirmación, recibirás un nuevo correo. Revisa también Spam.')
+    }catch(error){
+      if(import.meta.env.DEV)console.warn('[ARAUKA auth]',safeAuthDiagnostic('resend',error))
+      setResendMessage(resendErrorMessage())
+    }finally{setBusy(false)}
   }
   async function postJob(e:FormEvent){
     e.preventDefault();
@@ -308,16 +397,33 @@ export default function App(){
   }
   async function saveProfile(e:FormEvent){
     e.preventDefault();if(!requireUser())return
-    const patch={display_name:profileForm.display_name.trim()||'Usuario ARAUKA',company_name:profileForm.company_name.trim()||null,bio:profileForm.bio.trim(),categories:profileForm.categories,service_localities:profileForm.service_localities,is_professional:isPro}
+    if(mode==='empresa'){warn('Los datos de Empresa se guardan únicamente desde el formulario empresarial.');return}
+    const patch=profilePatchForExperience(mode,activeExperience?.profile_kind,profileForm)
+    if(!patch)return
     await write(s=>({...s,profiles:s.profiles.map(x=>x.id===currentId?{...x,...patch}:x)}),async()=>{
       const {error}=await supabase!.from('profiles').update(patch).eq('id',currentId!);if(error)throw error
-    },'Tu perfil fue actualizado.')
+      if(mode==='maestro'&&activeExperience?.profile_kind==='business'){
+        const {error:commercialError}=await supabase!.rpc('activate_experience',{p_experience:'maestro',p_profile_kind:'business',p_public_name:profileForm.company_name.trim()});if(commercialError)throw commercialError
+      }
+    },mode==='cliente'?'Tus datos personales fueron actualizados.':'Tu perfil profesional fue actualizado.')
   }
-  async function activatePro(){
-    if(!requireUser())return
-    const patch={is_professional:true}
-    await write(s=>({...s,profiles:s.profiles.map(x=>x.id===currentId?{...x,...patch}:x)}),async()=>{const {error}=await supabase!.from('profiles').update(patch).eq('id',currentId!);if(error)throw error},'Tu perfil profesional está activado.')
+  async function activateProfessionalExperience(kind:'professional'|'business'){
+    if(!supabase||!userId||busy||!canActivateOffering||canUseExperience(experiences,'maestro'))return
+    const validation=validateProfessionalActivation(kind,{displayName:profileForm.display_name,businessName:profileForm.company_name,bio:profileForm.bio,categories:profileForm.categories,localities:profileForm.service_localities})
+    if(validation){warn(validation);return}
+    const patch={display_name:profileForm.display_name.trim(),company_name:kind==='business'?profileForm.company_name.trim():null,bio:profileForm.bio.trim(),categories:profileForm.categories,service_localities:profileForm.service_localities}
+    setBusy(true);setError('')
+    try{
+      const profileUpdate=await supabase.from('profiles').update(patch).eq('id',userId)
+      if(profileUpdate.error)throw profileUpdate.error
+      const activation=await supabase.rpc('activate_experience',{p_experience:'maestro',p_profile_kind:kind,p_public_name:kind==='business'?patch.company_name:patch.display_name})
+      if(activation.error)throw activation.error
+      await refresh();goRoute('inicio','maestro',null,null)
+      notify(kind==='business'?'Tu experiencia Negocio independiente quedó activada.':'Tu experiencia Profesional quedó activada.')
+    }catch(cause){warn(cause instanceof Error?cause.message:'No fue posible activar la experiencia.')}
+    finally{setBusy(false)}
   }
+  const activatePro=()=>activateProfessionalExperience('professional')
   async function savePhone(e:FormEvent){
     e.preventDefault();if(!supabase||!userId)return
     if(!/^\+?[0-9\s()-]{8,20}$/.test(myPhone.trim())){warn('Ingresa un teléfono válido, idealmente con código +56.');return}
@@ -340,6 +446,40 @@ export default function App(){
       await refresh();notify('Fotografía agregada a tu portafolio.')
     }catch(e){warn(`No se pudo subir la fotografía: ${e instanceof Error?e.message:String(e)}`)}finally{setBusy(false)}
   }
+  const companyList=(value:string)=>[...new Set(value.split(',').map(item=>item.trim()).filter(Boolean))]
+  async function saveCompany(e:FormEvent){
+    e.preventDefault()
+    if(!supabase||!userId||!experiences.some(item=>item.experience==='empresa'))return
+    if(!isValidRut(companyForm.tax_id)){warn('Ingresa un RUT empresarial válido.');return}
+    const services=companyList(companyForm.services),coverage=companyList(companyForm.coverage)
+    if(!services.length||!coverage.length){warn('Indica al menos un servicio y una zona de cobertura.');return}
+    setBusy(true);setError('')
+    try{
+      const {data,error}=await supabase.rpc('upsert_my_company_profile',{
+        p_legal_name:companyForm.legal_name,p_tax_id:normalizeRut(companyForm.tax_id),p_legal_type:companyForm.legal_type,
+        p_public_name:companyForm.public_name||null,p_economic_activity:companyForm.economic_activity,p_tax_address:companyForm.tax_address,
+        p_municipality:companyForm.municipality,p_region:companyForm.region,p_representative_name:companyForm.representative_name,
+        p_contact_email:companyForm.contact_email,p_business_phone:companyForm.business_phone,p_services:services,p_coverage:coverage
+      })
+      if(error)throw error
+      setCompanyProfile(data as CommercialProfile)
+      await refresh();notify('Antecedentes empresariales guardados. La verificación queda pendiente de revisión administrativa.')
+    }catch(e){warn(`No se pudo guardar la empresa: ${e instanceof Error?e.message:String(e)}`)}finally{setBusy(false)}
+  }
+  async function uploadCompanyDocument(file:File){
+    if(!supabase||!userId||!experiences.some(item=>item.experience==='empresa'))return
+    if(!['application/pdf','image/jpeg','image/png'].includes(file.type)||file.size>10*1024*1024){warn('Selecciona un PDF, JPG o PNG de hasta 10 MB.');return}
+    setBusy(true);setError('')
+    try{
+      const extension=file.type==='application/pdf'?'pdf':file.type==='image/png'?'png':'jpg'
+      const path=`${userId}/${crypto.randomUUID()}.${extension}`
+      const {error:uploadError}=await supabase.storage.from('company-documents').upload(path,file,{contentType:file.type,upsert:false})
+      if(uploadError)throw uploadError
+      const {data,error}=await supabase.from('company_documents').insert({user_id:userId,storage_path:path,document_type:file.type}).select('*').single()
+      if(error)throw error
+      setCompanyDocuments(previous=>[data as CompanyDocument,...previous]);notify('Documento privado recibido para revisión.')
+    }catch(e){warn(`No se pudo subir el documento: ${e instanceof Error?e.message:String(e)}`)}finally{setBusy(false)}
+  }
   const visiblePros=useMemo(()=>data.profiles.filter(p=>p.is_professional && (!filterCategory||p.categories.includes(filterCategory))&&(!filterLocality||p.service_localities.includes(filterLocality))&&(!filterQuery||(getPublicProfessionalName(p)+' '+p.categories.join(' ')+' '+p.bio).toLowerCase().includes(filterQuery.toLowerCase()))),[data.profiles,filterCategory,filterLocality,filterQuery])
   const verified=(id:string)=>data.verifications.find(v=>v.pro_id===id)
   const stars=(id:string)=>{const results=data.reviews.filter(r=>r.pro_id===id);if(!results.length)return null;return (results.reduce((n,r)=>n+r.rating,0)/results.length).toFixed(1).replace('.',',')}
@@ -347,7 +487,7 @@ export default function App(){
   const toggleList=(key:'categories'|'service_localities',value:string)=>setProfileForm(prev=>({...prev,[key]:prev[key].includes(value)?prev[key].filter(x=>x!==value):[...prev[key],value]}))
   const banner=<div className="trial-banner"><Sparkles size={16}/><span><strong>ARAUKA en lanzamiento.</strong> Clientes y profesionales participan gratis. No hay pagos ni comisiones.</span></div>
   function proCard(p:Profile){const score=stars(p.id);return <article className="pro-card" key={p.id}>
-    <div className="pro-top"><div className="pro-icon"><CategoryIcon category={p.categories[0]||''} size={26}/></div><div className="pro-overview"><div className="name-row"><h3>{getPublicProfessionalName(p)}</h3>{verified(p.id)?.identity_verified&&<span className="verified"><ShieldCheck size={13}/> Identidad verificada</span>}</div><p>{p.categories.slice(0,3).join(' · ')}</p><div className="muted tiny"><MapPin size={13}/>{p.service_localities.join(', ')||'Zonas por definir'}</div></div></div>
+    <div className="pro-top"><div className="pro-icon"><CategoryIcon category={p.categories[0]||''} size={26}/></div><div className="pro-overview"><div className="name-row"><h3>{getPublicProfessionalName(p)}</h3>{verifiedCompanyIds.includes(p.id)?<span className="verified"><ShieldCheck size={13}/> Empresa verificada</span>:verified(p.id)?.identity_verified&&<span className="verified"><ShieldCheck size={13}/> Identidad verificada</span>}</div><p>{p.categories.slice(0,3).join(' · ')}</p><div className="muted tiny"><MapPin size={13}/>{p.service_localities.join(', ')||'Zonas por definir'}</div></div></div>
     <p className="pro-blurb">{p.bio||'Profesional en ARAUKA. Consulta sus especialidades y trabajos.'}</p>
     <div className="card-foot"><span className="muted tiny">{score?<><Star size={13} fill="currentColor"/> {score} · {data.reviews.filter(r=>r.pro_id===p.id).length} evaluaciones</>:<><CircleHelp size={13}/> Sin evaluaciones todavía</>}</span><button className="btn btn-soft btn-sm" onClick={()=>{goRoute('profesional',mode,null,p.id)}}>Ver perfil <ArrowRight size={15}/></button></div>
   </article>}
@@ -357,13 +497,13 @@ export default function App(){
     <div className="job-foot"><span><MapPin size={14}/>{j.locality}</span><span><Clock3 size={14}/>{formatDate(j.created_at)}</span></div>
     <div className="card-foot"><span className="muted tiny">{asPro?(responded?'Ya manifestaste interés':'Oportunidad local'):`${data.interests.filter(i=>i.job_id===j.id).length} profesionales interesados`}</span><button className="btn btn-soft btn-sm" onClick={()=>openJob(j.id)}>Ver detalle <ChevronRight size={15}/></button></div>
   </article>}
-  function bottomNav(){const entries: {key:Page;icon:typeof Compass;label:string}[]=mode==='cliente'?[{key:'inicio',icon:Compass,label:'Inicio'},{key:'buscar',icon:Search,label:'Buscar'},{key:'trabajos',icon:BriefcaseBusiness,label:'Mis trabajos'},{key:'cuenta',icon:UserCircle2,label:'Mi cuenta'}]:[{key:'inicio',icon:Compass,label:'Inicio'},{key:'trabajos',icon:BriefcaseBusiness,label:'Oportunidades'},{key:'buscar',icon:Users,label:'Profesionales'},{key:'cuenta',icon:UserCircle2,label:'Mi perfil'}]
+  function bottomNav(){const entries: {key:Page;icon:typeof Compass;label:string}[]=mode==='cliente'?[{key:'inicio',icon:Compass,label:'Inicio'},{key:'buscar',icon:Search,label:'Buscar'},{key:'trabajos',icon:BriefcaseBusiness,label:'Mis trabajos'},{key:'cuenta',icon:UserCircle2,label:'Mi cuenta'}]:mode==='empresa'?[{key:'inicio',icon:Compass,label:'Inicio'},{key:'trabajos',icon:BriefcaseBusiness,label:'Oportunidades'},{key:'buscar',icon:Users,label:'Directorio'},{key:'cuenta',icon:UserCircle2,label:'Mi empresa'}]:[{key:'inicio',icon:Compass,label:'Inicio'},{key:'trabajos',icon:BriefcaseBusiness,label:'Oportunidades'},{key:'buscar',icon:Users,label:'Directorio'},{key:'cuenta',icon:UserCircle2,label:activeExperience?.profile_kind==='business'?'Mi negocio':'Mi perfil'}]
     return <nav className="bottom-nav" aria-label="Navegación principal">{entries.map(({key,icon:Icon,label})=><button key={key} className={screen===key?'active':''} onClick={()=>navigate(key)}><Icon size={20}/><span>{label}</span></button>)}</nav>
   }
   function navButton(key:Page,label:string){return <button className={`toplink ${screen===key?'active':''}`} onClick={()=>navigate(key)}>{label}</button>}
   function renderHome(){return <>
-    <section className="hero"><div className="hero-copy"><span className="hero-kicker"><span className="pulse-dot"/> Villarrica y alrededores</span><h1>{mode==='cliente'?<>La solución que buscas, <em>más cerca.</em></>:<>Tu próximo trabajo puede estar <em>aquí cerca.</em></>}</h1><p>{mode==='cliente'?'Encuentra maestros y servicios de tu zona, revisa sus perfiles y publica lo que necesitas sin pagar por usar ARAUKA.':'Descubre solicitudes de clientes de tu zona, presenta tu experiencia y conecta con nuevas oportunidades. Gratis durante el lanzamiento.'}</p>
-    <div className="hero-actions">{mode==='cliente'?<><button className="btn btn-accent" onClick={()=>navigate('publicar')}><Plus size={19}/> Publicar un trabajo</button><button className="btn btn-outline-light" onClick={()=>navigate('buscar')}>Buscar profesionales <ArrowRight size={17}/></button></>:<><button className="btn btn-accent" onClick={()=>navigate('trabajos')}>Ver oportunidades <ArrowRight size={17}/></button><button className="btn btn-outline-light" onClick={()=>navigate('cuenta')}>Editar mi perfil</button></>}</div></div><div className="hero-decoration" aria-hidden="true"><div className="halo halo-one"/><div className="halo halo-two"/><div className="hero-badge hero-badge-one"><Hammer size={20}/> Oficios locales</div><div className="hero-badge hero-badge-two"><HeartHandshake size={19}/> Conexiones reales</div></div></section>
+    <section className="hero"><div className="hero-copy"><span className="hero-kicker"><span className="pulse-dot"/> Villarrica y alrededores</span><h1>{mode==='cliente'?<>La solución que buscas, <em>más cerca.</em></>:mode==='empresa'?<>Tu empresa, preparada para <em>conectar.</em></>:<>Tu próximo trabajo puede estar <em>aquí cerca.</em></>}</h1><p>{mode==='cliente'?'Encuentra maestros y servicios de tu zona, revisa sus perfiles y publica lo que necesitas sin pagar por usar ARAUKA.':mode==='empresa'?'Presenta tus servicios, administra tus antecedentes empresariales y encuentra oportunidades con una identidad claramente diferenciada.':'Descubre solicitudes de clientes de tu zona, presenta tu experiencia y conecta con nuevas oportunidades. Gratis durante el lanzamiento.'}</p>
+    <div className="hero-actions">{mode==='cliente'?<><button className="btn btn-accent" onClick={()=>navigate('publicar')}><Plus size={19}/> Publicar un trabajo</button><button className="btn btn-outline-light" onClick={()=>navigate('buscar')}>Buscar profesionales <ArrowRight size={17}/></button></>:mode==='empresa'?<><button className="btn btn-accent" onClick={()=>navigate('cuenta')}>Administrar mi empresa <ArrowRight size={17}/></button><button className="btn btn-outline-light" onClick={()=>navigate('trabajos')}>Ver oportunidades</button></>:<><button className="btn btn-accent" onClick={()=>navigate('trabajos')}>Ver oportunidades <ArrowRight size={17}/></button><button className="btn btn-outline-light" onClick={()=>navigate('cuenta')}>Editar mi perfil</button></>}</div></div><div className="hero-decoration" aria-hidden="true"><div className="halo halo-one"/><div className="halo halo-two"/><div className="hero-badge hero-badge-one"><Hammer size={20}/> Oficios locales</div><div className="hero-badge hero-badge-two"><HeartHandshake size={19}/> Conexiones reales</div></div></section>
     {banner}
     <section className="section"><div className="section-heading"><div><span className="eyebrow">ENCUENTRA LO QUE NECESITAS</span><h2>Servicios para tu día a día</h2></div><button className="text-link" onClick={()=>navigate('buscar')}>Ver todos <ArrowRight size={16}/></button></div><div className="category-grid">{CATEGORIES.slice(0,8).map(c=><button className="category-tile" key={c} onClick={()=>{setFilterCategory(c);navigate('buscar')}}><span className="category-icon"><CategoryIcon category={c}/></span><span>{c}</span><ChevronRight size={15} className="cat-arrow"/></button>)}</div></section>
     <section className="section"><div className="section-heading"><div><span className="eyebrow">PERSONAS Y OFICIOS</span><h2>Profesionales en ARAUKA</h2></div><button className="text-link" onClick={()=>navigate('buscar')}>Explorar <ArrowRight size={16}/></button></div><div className="cards-grid">{data.profiles.filter(p=>p.is_professional).slice(0,3).map(proCard)}</div><p className="hint">{configured?'Los perfiles provienen de la base de datos.':'Perfiles de ejemplo: aún no representan verificaciones ni recomendaciones reales.'}</p></section>
@@ -380,12 +520,48 @@ export default function App(){
     {mine&&job.status==='matched'&&<><div className="divider"/><h2>¿Ya se realizó el trabajo?</h2><button className="btn btn-soft" onClick={()=>finishJob(job)} disabled={busy}><CheckCircle2 size={18}/> Marcar como finalizado</button></>}
     {mine&&job.status==='completed'&&!reviewed&&job.selected_pro_id&&<><div className="divider"/><h2>Evalúa el servicio realizado</h2><p className="muted">Solo puedes evaluar al profesional seleccionado después de finalizar el trabajo.</p><label className="field">Calificación<select value={reviewRating} onChange={e=>setReviewRating(Number(e.target.value))}>{[5,4,3,2,1].map(n=><option key={n} value={n}>{n} {n===1?'estrella':'estrellas'}</option>)}</select></label><label className="field">Tu experiencia<textarea rows={3} value={reviewComment} onChange={e=>setReviewComment(e.target.value)} placeholder="¿Cómo fue la atención y el resultado?"/></label><button className="btn btn-primary" disabled={busy} onClick={()=>reviewJob(job)}>Publicar evaluación</button></>}{mine&&reviewed&&<div className="notice friendly"><CheckCircle2 size={19}/> Este trabajo ya tiene una evaluación publicada.</div>}
     </div></section>}
-  function renderAccount(){return <section className="page narrow"><div className="page-heading"><span className="eyebrow">TU ESPACIO</span><h1>{mode==='maestro'?'Mi perfil profesional':'Mi cuenta'}</h1><p>Personaliza tu presentación y administra tu información.</p></div>{!signedIn?<div className="empty"><UserCircle2 size={32}/><h3>Bienvenido a ARAUKA</h3><p>Regístrate gratis para publicar trabajos o convertirte en profesional.</p><button className="btn btn-primary" onClick={()=>requestAuth()}>Crear cuenta</button><button className="btn btn-soft" onClick={()=>requestAuth('login')}>Ya tengo cuenta</button></div>:<><div className="account-heading"><div className="account-avatar"><UserCircle2 size={29}/></div><div><strong>{getName(currentProfile)}</strong><p className="muted">{configured?'Cuenta conectada a Supabase':'Cuenta de demostración'}</p></div>{supabase&&<button className="btn btn-soft btn-sm" onClick={async()=>{await supabase?.auth.signOut();notify('Sesión cerrada.')}}><LogOut size={15}/> Salir</button>}</div>{configured&&<section className="form-card" id="avisos"><h2><Bell size={19}/> Mis notificaciones {notifications.filter(n=>!n.read_at).length>0&&<span className="notice-count">{notifications.filter(n=>!n.read_at).length} nuevas</span>}</h2><p className="muted">Avisos dentro de ARAUKA. El correo se activa por separado desde Supabase.</p><label className="consent-row"><input type="checkbox" checked={emailEnabled} onChange={e=>void updateEmailPreference(e.target.checked)}/> Quiero recibir notificaciones por correo cuando esté activado el servicio de envío.</label>{notifications.length?notifications.map(n=><button key={n.id} className={`notification-item ${n.read_at?'':'unread'}`} onClick={()=>void readNotification(n)}><strong>{n.title}</strong><span>{n.body}</span><small>{formatDate(n.created_at)} · {n.read_at?'Leída':'Nueva'} {n.job_id?'· Ver trabajo':''}</small></button>):<p className="muted">Todavía no tienes avisos.</p>}</section>}<form className="form-card" onSubmit={saveProfile}><h2>Información del perfil</h2><label className="field">Nombre para mostrar<input value={profileForm.display_name} onChange={e=>setProfileForm({...profileForm,display_name:e.target.value})}/></label><label className="field">Nombre de la empresa (opcional)<input placeholder="Ej.: NOBRO" value={profileForm.company_name} onChange={e=>setProfileForm({...profileForm,company_name:e.target.value})}/></label><label className="field">Presentación<textarea rows={4} value={profileForm.bio} onChange={e=>setProfileForm({...profileForm,bio:e.target.value})} placeholder="Cuéntales a los clientes qué haces y qué experiencia tienes."/></label>{(mode==='maestro'||isPro)&&<><h3>Mis oficios</h3><div className="check-grid">{CATEGORIES.map(c=><label key={c}><input type="checkbox" checked={profileForm.categories.includes(c)} onChange={()=>toggleList('categories',c)}/>{c}</label>)}</div><h3>Localidades donde trabajo</h3><div className="check-grid">{LOCALITIES.map(c=><label key={c}><input type="checkbox" checked={profileForm.service_localities.includes(c)} onChange={()=>toggleList('service_localities',c)}/>{c}</label>)}</div></>}<button className="btn btn-primary btn-full" type="submit" disabled={busy}>{busy?'Guardando...':'Guardar cambios'}</button></form>
-    <div className="form-card"><h2>Experiencia de navegación</h2><p className="muted">Modo actual: <strong>{mode==='cliente'?'Cliente':'Maestro'}</strong>. Este modo es independiente de tu nombre personal o nombre de empresa y queda guardado en la dirección de la página.</p>{mode==='cliente'?<button className="btn btn-soft" onClick={()=>changeRole('maestro')}><Hammer size={17}/> Cambiar a Maestro</button>:<button className="btn btn-soft" onClick={()=>changeRole('cliente')}><Users size={17}/> Cambiar a Cliente</button>}</div>
+  async function makePrimary(next:Mode){
+    if(!supabase||!canUseExperience(experiences,next))return
+    const {error}=await supabase.rpc('set_primary_experience',{p_experience:next})
+    if(error){warn(error.message);return}
+    await refresh();goRoute('inicio',next,null,null);notify('Experiencia principal actualizada.')
+  }
+  function renderCompanyRegistration(){
+    if(mode!=='empresa'||!experiences.some(item=>item.experience==='empresa'))return null
+    const status=companyProfile?.verification_status??'pending'
+    const statusText=status==='verified'?'Empresa verificada':status==='rejected'?'Revisión rechazada':'Verificación pendiente'
+    return <><form className="form-card company-registration" onSubmit={saveCompany}>
+      <div className="company-form-heading"><div><span className="eyebrow">REGISTRO EMPRESARIAL</span><h2>Antecedentes de la empresa</h2></div><span className={`company-status status-${status}`}>{status==='verified'&&<ShieldCheck size={15}/>} {statusText}</span></div>
+      <p className="notice"><LockKeyhole size={18}/><span>Los campos privados se usan únicamente para administración y revisión. La dirección tributaria y los documentos nunca se muestran en el perfil público.</span></p>
+      <h3>Identidad tributaria <span className="privacy-label">Privado</span></h3><div className="form-grid">
+        <label className="field">Razón social<input required maxLength={180} value={companyForm.legal_name} onChange={e=>setCompanyForm({...companyForm,legal_name:e.target.value})}/></label>
+        <label className="field">RUT del contribuyente<input required placeholder="12.345.678-5" value={companyForm.tax_id} onBlur={()=>setCompanyForm(previous=>({...previous,tax_id:normalizeRut(previous.tax_id)}))} onChange={e=>setCompanyForm({...companyForm,tax_id:e.target.value})}/></label>
+        <label className="field">Tipo jurídico o tributario<input required maxLength={100} placeholder="Ej.: SpA, EIRL, Ltda." value={companyForm.legal_type} onChange={e=>setCompanyForm({...companyForm,legal_type:e.target.value})}/></label>
+        <label className="field">Giro o actividad económica<input required maxLength={180} value={companyForm.economic_activity} onChange={e=>setCompanyForm({...companyForm,economic_activity:e.target.value})}/></label>
+        <label className="field field-wide">Dirección tributaria<input required maxLength={240} autoComplete="street-address" value={companyForm.tax_address} onChange={e=>setCompanyForm({...companyForm,tax_address:e.target.value})}/></label>
+        <label className="field">Comuna<input required maxLength={100} value={companyForm.municipality} onChange={e=>setCompanyForm({...companyForm,municipality:e.target.value})}/></label>
+        <label className="field">Región<input required maxLength={100} value={companyForm.region} onChange={e=>setCompanyForm({...companyForm,region:e.target.value})}/></label>
+        <label className="field">Representante o administrador<input required maxLength={160} value={companyForm.representative_name} onChange={e=>setCompanyForm({...companyForm,representative_name:e.target.value})}/></label>
+        <label className="field">Correo electrónico<input required type="email" maxLength={254} value={companyForm.contact_email} onChange={e=>setCompanyForm({...companyForm,contact_email:e.target.value})}/></label>
+        <label className="field">Teléfono comercial<input required type="tel" placeholder="+56 9 1234 5678" value={companyForm.business_phone} onChange={e=>setCompanyForm({...companyForm,business_phone:e.target.value})}/></label>
+      </div><h3>Presentación <span className="public-label">Público</span></h3>
+      <label className="field">Nombre comercial opcional<input maxLength={120} placeholder="Nombre que verán los clientes" value={companyForm.public_name} onChange={e=>setCompanyForm({...companyForm,public_name:e.target.value})}/></label>
+      <label className="field">Servicios ofrecidos<input required placeholder="Construcción, mantención, electricidad" value={companyForm.services} onChange={e=>setCompanyForm({...companyForm,services:e.target.value})}/><small>Separa cada servicio con una coma.</small></label>
+      <label className="field">Zonas de cobertura<input required placeholder="Villarrica, Pucón, Región de La Araucanía" value={companyForm.coverage} onChange={e=>setCompanyForm({...companyForm,coverage:e.target.value})}/><small>Separa cada zona con una coma.</small></label>
+      {status==='verified'&&<p className="notice">Al modificar antecedentes, la empresa volverá a estado pendiente hasta una nueva revisión.</p>}<button className="btn btn-primary btn-full" type="submit" disabled={busy}>{busy?'Guardando...':'Guardar antecedentes empresariales'}</button>
+    </form><section className="form-card company-documents"><h2><ShieldCheck size={20}/> Documentos para revisión</h2><p className="muted">Bucket privado. Solo tú y revisores administrativos autorizados pueden acceder. No se generan enlaces públicos permanentes.</p><label className="upload-btn"><ImagePlus size={20}/> Subir PDF, JPG o PNG (hasta 10 MB)<input type="file" accept="application/pdf,image/jpeg,image/png" disabled={busy} onChange={e=>{const file=e.target.files?.[0];if(file)void uploadCompanyDocument(file);e.target.value=''}}/></label>{companyDocuments.length>0&&<ul className="document-list">{companyDocuments.map(document=><li key={document.id}><LockKeyhole size={15}/><span>{document.document_type}</span><small>{formatDate(document.created_at)}</small></li>)}</ul>}</section></>
+  }
+  function renderProfessionalActivation(){if(!configured||!userId||canUseExperience(experiences,'maestro'))return null;return <section className="form-card activation-card" id="activar-profesional"><span className="eyebrow">NUEVA EXPERIENCIA</span><h2>Activa Profesional o Negocio independiente</h2><p className="muted">Usarás esta misma cuenta y conservarás Cliente. Completa primero los datos básicos; la experiencia principal no cambiará automáticamente.</p><div className="form-grid"><label className="field">Nombre para mostrar<input required value={profileForm.display_name} onChange={e=>setProfileForm({...profileForm,display_name:e.target.value})} placeholder="Tu nombre o nombre profesional"/></label><label className="field">Nombre comercial para Negocio<input value={profileForm.company_name} onChange={e=>setProfileForm({...profileForm,company_name:e.target.value})} placeholder="Ej.: NOBRO"/><small>Es obligatorio solo si eliges Negocio independiente.</small></label></div><label className="field">Presentación profesional<textarea required minLength={20} rows={4} value={profileForm.bio} onChange={e=>setProfileForm({...profileForm,bio:e.target.value})} placeholder="Describe tu experiencia, servicios y forma de trabajo."/></label><h3>Al menos un oficio o servicio</h3><div className="check-grid">{CATEGORIES.map(c=><label key={c}><input type="checkbox" checked={profileForm.categories.includes(c)} onChange={()=>toggleList('categories',c)}/>{c}</label>)}</div><h3>Al menos una localidad de cobertura</h3><div className="check-grid">{LOCALITIES.map(c=><label key={c}><input type="checkbox" checked={profileForm.service_localities.includes(c)} onChange={()=>toggleList('service_localities',c)}/>{c}</label>)}</div><div className="activation-actions"><button type="button" className="btn btn-primary" disabled={busy} onClick={()=>void activateProfessionalExperience('professional')}><Hammer size={17}/>{busy?'Activando...':'Activar Profesional'}</button><button type="button" className="btn btn-soft" disabled={busy} onClick={()=>void activateProfessionalExperience('business')}><BriefcaseBusiness size={17}/> Activar Negocio independiente</button></div><div className="notice"><ShieldCheck size={18}/><span>Empresa utiliza un registro empresarial distinto, con antecedentes privados y revisión administrativa. No se activa desde estos botones.</span></div></section>}
+  function renderAccount(){return <section className="page narrow"><div className="page-heading"><span className="eyebrow">TU ESPACIO</span><h1>{mode==='maestro'?'Mi perfil profesional':mode==='empresa'?'Mi empresa':'Mi cuenta'}</h1><p>Personaliza tu presentación y administra tu información.</p></div>{!signedIn?<div className="empty"><UserCircle2 size={32}/><h3>Bienvenido a ARAUKA</h3><p>Regístrate gratis para publicar trabajos o convertirte en profesional.</p><button className="btn btn-primary" onClick={()=>requestAuth()}>Crear cuenta</button><button className="btn btn-soft" onClick={()=>requestAuth('login')}>Ya tengo cuenta</button></div>:<><div className="account-heading"><div className="account-avatar"><UserCircle2 size={29}/></div><div><strong>{getName(currentProfile)}</strong><p className="muted">{configured?'Cuenta conectada a Supabase':'Cuenta de demostración'}</p></div>{supabase&&<button className="btn btn-soft btn-sm" onClick={async()=>{await supabase?.auth.signOut();notify('Sesión cerrada.')}}><LogOut size={15}/> Salir</button>}</div>{configured&&<section className="form-card" id="avisos"><h2><Bell size={19}/> Mis notificaciones {notifications.filter(n=>!n.read_at).length>0&&<span className="notice-count">{notifications.filter(n=>!n.read_at).length} nuevas</span>}</h2><p className="muted">Avisos dentro de ARAUKA. El correo se activa por separado desde Supabase.</p><label className="consent-row"><input type="checkbox" checked={emailEnabled} onChange={e=>void updateEmailPreference(e.target.checked)}/> Quiero recibir notificaciones por correo cuando esté activado el servicio de envío.</label>{notifications.length?notifications.map(n=><button key={n.id} className={`notification-item ${n.read_at?'':'unread'}`} onClick={()=>void readNotification(n)}><strong>{n.title}</strong><span>{n.body}</span><small>{formatDate(n.created_at)} · {n.read_at?'Leída':'Nueva'} {n.job_id?'· Ver trabajo':''}</small></button>):<p className="muted">Todavía no tienes avisos.</p>}</section>}{renderCompanyRegistration()}<form className="form-card" onSubmit={saveProfile}><h2>Información del perfil</h2><label className="field">Nombre para mostrar<input value={profileForm.display_name} onChange={e=>setProfileForm({...profileForm,display_name:e.target.value})}/></label><label className="field">Nombre de la empresa (opcional)<input placeholder="Ej.: NOBRO" value={profileForm.company_name} onChange={e=>setProfileForm({...profileForm,company_name:e.target.value})}/></label><label className="field">Presentación<textarea rows={4} value={profileForm.bio} onChange={e=>setProfileForm({...profileForm,bio:e.target.value})} placeholder="Cuéntales a los clientes qué haces y qué experiencia tienes."/></label>{(mode==='maestro'||isPro)&&<><h3>Mis oficios</h3><div className="check-grid">{CATEGORIES.map(c=><label key={c}><input type="checkbox" checked={profileForm.categories.includes(c)} onChange={()=>toggleList('categories',c)}/>{c}</label>)}</div><h3>Localidades donde trabajo</h3><div className="check-grid">{LOCALITIES.map(c=><label key={c}><input type="checkbox" checked={profileForm.service_localities.includes(c)} onChange={()=>toggleList('service_localities',c)}/>{c}</label>)}</div></>}<button className="btn btn-primary btn-full" type="submit" disabled={busy}>{busy?'Guardando...':'Guardar cambios'}</button></form>
     {isPro&&<div className="form-card"><h2>Fotografías de mis trabajos</h2><p className="muted">Muestra ejemplos de trabajos realizados. En modo real se guardan en Supabase Storage.</p><label className={`upload-btn ${!configured?'disabled':''}`}><ImagePlus size={20}/> Agregar foto (hasta 5 MB)<input type="file" accept="image/jpeg,image/png,image/webp" disabled={!configured||busy} onChange={e=>{const f=e.target.files?.[0];if(f)void uploadPortfolio(f);e.target.value=''}}/></label>{!configured&&<p className="form-small">Disponible al conectar un proyecto Supabase.</p>}{data.portfolio.filter(x=>x.pro_id===currentId).length>0&&<div className="portfolio-grid">{data.portfolio.filter(x=>x.pro_id===currentId).map(x=><figure key={x.id}><img src={imageUrl(x.image_path)} alt={x.caption}/></figure>)}</div>}</div>}
     {configured&&<form className="form-card" onSubmit={savePhone}><h2>Teléfono privado</h2><p className="muted">Solo se entregará a la otra parte después de ser seleccionado y cuando ambos autoricen compartir el contacto.</p><label className="field">Teléfono con código de país<input type="tel" placeholder="+56 9 1234 5678" value={myPhone} onChange={e=>setMyPhone(e.target.value)}/></label><button className="btn btn-soft" type="submit" disabled={busy}><Phone size={17}/> Guardar teléfono</button></form>}
     {supabase&&<div className="mobile-only"><button className="btn btn-soft btn-full" onClick={()=>void supabase?.auth.signOut()}><LogOut size={16}/> Cerrar sesión</button></div>}
+    {configured&&experiences.length>0&&<div className="form-card experience-manager"><span className="eyebrow">TU CUENTA</span><h2>Mis experiencias</h2><p className="muted">{experienceNavigationMessage(activeExperience,experiences.length>1)}</p><div className="experience-switcher">{experiences.map(item=><button type="button" aria-pressed={item.experience===mode} disabled={item.experience===mode} className={`btn ${item.experience===mode?'btn-primary':'btn-soft'}`} key={item.experience} onClick={()=>changeRole(item.experience)}>{experiencePanelLabel(item)}{item.is_primary?' · Principal':''}</button>)}</div>{activeExperience?.is_primary?<p className="primary-note"><CheckCircle2 size={15}/> Esta es tu experiencia principal.</p>:activeExperience&&<button type="button" className="text-link primary-action" onClick={()=>void makePrimary(mode)}>Usar {activeIdentityLabel} como experiencia principal</button>}{canActivateOffering&&<div className="activation-option"><p><strong>¿También ofreces servicios?</strong><br/><span className="muted">Puedes activar Profesional independiente o Negocio independiente. Debes elegir una de las dos categorías.</span></p><button type="button" className="btn btn-soft" onClick={()=>setActivationOpen(value=>!value)}><Hammer size={17}/>{activationOpen?'Cerrar activación':'Activar nueva experiencia'}</button></div>}{canActivateOffering&&activationOpen&&renderProfessionalActivation()}</div>}
+    {configured&&<AccountDeletionPanel experienceCount={experiences.length}/>}
     </> }</section>}
+  if(pendingConfirmationEmail)return <main className="confirmation-page"><section className="confirmation-card" role="status" aria-live="polite"><button className="logo confirmation-logo" aria-label="ARAUKA"><span className="brand-mark">A</span><span>arauka<span className="brand-period">.</span><small>conecta tu zona</small></span></button><div className="confirmation-icon"><CheckCircle2 size={34}/></div><span className="eyebrow">CONFIRMA TU CORREO</span><h1>¡Tu cuenta está casi lista!</h1><p>Te enviamos un correo de confirmación a <strong>{pendingConfirmationEmail}</strong>. Revisa tu bandeja de entrada y abre el enlace para activar tu cuenta. Si no lo encuentras, revisa Spam.</p><div className="notice"><LockKeyhole size={18}/><span>Debes confirmar el correo antes de iniciar sesión. Tu experiencia <strong>{registrationChoiceLabel(pendingConfirmationChoice??'client')}</strong> quedará asociada a esta misma cuenta.</span></div>{resendMessage&&<p className="confirmation-feedback" role="status">{resendMessage}</p>}<div className="confirmation-actions"><button type="button" className="btn btn-primary" onClick={()=>{setPendingConfirmationEmail(null);setPendingConfirmationChoice(null);setResendMessage('');requestAuth('login',pendingConfirmationChoice??registrationChoice)}}><LogIn size={17}/> Volver a Iniciar sesión</button><button type="button" className="btn btn-soft" disabled={busy||resendCooldown>0} onClick={()=>void resendConfirmation()}>{busy?'Reenviando...':resendCooldown>0?`Reenviar en ${resendCooldown} s`:'Reenviar correo de confirmación'}</button></div><p className="form-small">Por seguridad, el reenvío tiene una espera entre solicitudes y la respuesta no confirma si una dirección ya estaba registrada.</p></section></main>
+  if(configured&&!loading&&userId&&experiences.length&&!canUseExperience(experiences,mode))return <div className="experience-entry"><div className="experience-entry-inner"><button className="logo entry-logo" aria-label="ARAUKA"><span className="brand-mark">A</span><span>arauka<span className="brand-period">.</span></span></button><div className="experience-copy"><span className="eyebrow">CAPACIDAD NO ACTIVADA</span><h1>Esta experiencia no está disponible en tu cuenta</h1><p>Visitar una URL no concede permisos ni cambia tu experiencia principal. Puedes volver a una experiencia activa o preparar una nueva desde Mi cuenta.</p></div><div className="experience-options">{experiences.map(item=><button key={item.experience} className="experience-option" onClick={()=>changeRole(item.experience)}><span className="experience-icon">{item.experience==='cliente'?<Users size={30}/>:<BriefcaseBusiness size={30}/>}</span><span><strong>Panel {experiencePanelLabel(item)}</strong><b>{experienceLabel(item)}</b><small>{item.public_name}</small></span><ChevronRight size={24}/></button>)}</div>{mode==='maestro'&&<button className="btn btn-primary selector-account" onClick={()=>goRoute('cuenta','cliente',null,null)}><Hammer size={17}/> Preparar y activar Profesional o Negocio</button>}{mode==='empresa'&&<div className="notice"><ShieldCheck size={18}/><span>El alta de Empresa requiere su formulario empresarial y revisión administrativa. Esta capacidad no se concede automáticamente.</span></div>}</div></div>
+  if(configured&&!loading&&!userId&&!experienceChosen)return <div className="experience-entry"><div className="experience-entry-inner"><button className="logo entry-logo" aria-label="ARAUKA"><span className="brand-mark">A</span><span>arauka<span className="brand-period">.</span><small>conecta tu zona</small></span></button><div className="experience-copy"><span className="eyebrow">UNA CUENTA, EXPERIENCIAS CLARAS</span><h1>¿Cómo quieres comenzar?</h1><p>Esta elección activa solo la capacidad indicada. Más adelante podrás solicitar otras sin crear otro correo.</p></div><div className="experience-options four-options"><button className="experience-option client-option" onClick={()=>chooseExperience('cliente','client')}><span className="experience-icon"><Users size={28}/></span><span><strong>Necesito contratar</strong><b>Cliente particular</b><small>Solicitudes, contactos y evaluaciones.</small></span></button><button className="experience-option pro-option" onClick={()=>chooseExperience('maestro','professional')}><span className="experience-icon"><Hammer size={28}/></span><span><strong>Soy profesional</strong><b>Profesional independiente</b><small>Oficios, experiencia y portafolio.</small></span></button><button className="experience-option pro-option" onClick={()=>chooseExperience('maestro','business')}><span className="experience-icon"><BriefcaseBusiness size={28}/></span><span><strong>Trabajo con una marca</strong><b>Negocio independiente</b><small>Nombre comercial sin exigir una sociedad.</small></span></button><button className="experience-option company-option" onClick={()=>chooseExperience('empresa','company')}><span className="experience-icon"><ShieldCheck size={28}/></span><span><strong>Represento una empresa</strong><b>Empresa</b><small>Registro empresarial y verificación pendiente.</small></span></button></div></div></div>
   if(configured&&!loading&&!userId&&!experienceChosen)return <div className="experience-entry"><div className="experience-entry-inner"><button className="logo entry-logo" aria-label="ARAUKA"><span className="brand-mark">A</span><span>arauka<span className="brand-period">.</span><small>conecta tu zona</small></span></button><div className="experience-copy"><span className="eyebrow">ELIGE CÓMO QUIERES USAR ARAUKA</span><h1>¿Qué necesitas hacer hoy?</h1><p>Usarás una sola cuenta. Podrás cambiar de experiencia más adelante desde Mi cuenta.</p></div><div className="experience-options"><button className="experience-option client-option" onClick={()=>chooseExperience('cliente')}><span className="experience-icon"><Users size={30}/></span><span><strong>Necesito un servicio</strong><b>Cliente</b><small>Publica solicitudes, recibe propuestas y elige un profesional.</small></span><ChevronRight size={24}/></button><button className="experience-option pro-option" onClick={()=>chooseExperience('maestro')}><span className="experience-icon"><Hammer size={30}/></span><span><strong>Ofrezco mis servicios</strong><b>Maestro</b><small>Activa tu perfil profesional y encuentra oportunidades locales.</small></span><ChevronRight size={24}/></button></div><p className="entry-note"><LockKeyhole size={15}/> Después podrás registrarte o ingresar con la misma cuenta en ambas experiencias.</p></div></div>
-  return <div className="site"><header className="topbar"><div className="topbar-inner"><button className="logo" onClick={()=>navigate('inicio')} aria-label="ARAUKA, ir al inicio"><span className="brand-mark">A</span><span>arauka<span className="brand-period">.</span><small>conecta tu zona</small></span></button><nav className="top-nav" aria-label="Menú">{navButton('inicio','Inicio')}{navButton('buscar','Profesionales')}{navButton('trabajos',mode==='cliente'?'Mis trabajos':'Oportunidades')}{navButton('cuenta','Mi cuenta')}</nav><div className="top-actions">{configured&&userId&&<button className="notification-trigger" onClick={()=>navigate('cuenta')} aria-label={`Mis avisos: ${notifications.filter(n=>!n.read_at).length} pendientes`}><Bell size={18}/>{notifications.some(n=>!n.read_at)&&<span className="notification-dot"/>}</button>}<button className="current-role" onClick={()=>navigate('cuenta')} title="Cambiar experiencia desde Mi cuenta"><span>{mode==='cliente'?'Cliente':'Maestro'}</span><span className="muted">· Mi cuenta</span></button>{configured&&!userId&&<button className="btn btn-primary btn-sm login-btn" onClick={()=>requestAuth('login')}><LogIn size={15}/> Ingresar</button>}{configured&&userId&&<button className="account-pill" onClick={()=>navigate('cuenta')}><UserCircle2 size={19}/></button>}</div></div></header><main className="main-content"><div className="top-caption">{!configured&&<span className="demo-flag">MODO DEMOSTRACIÓN</span>}<span>{modeDescription}</span></div>{message&&<div role="status" className="global-message"><CheckCircle2 size={19}/>{message}<button onClick={()=>setMessage('')} aria-label="Cerrar mensaje"><X size={15}/></button></div>}{error&&<div role="alert" className="global-error"><CircleHelp size={19}/>{error}<button onClick={()=>setError('')} aria-label="Cerrar error"><X size={15}/></button></div>}{loading?<div className="empty"><span className="spinner"/> Cargando datos de ARAUKA...</div>:screen==='inicio'?renderHome():screen==='buscar'?renderSearch():screen==='publicar'?renderPublish():screen==='trabajos'?renderJobs():screen==='profesional'?renderPro():screen==='detalle'?renderJobDetail():renderAccount()}</main><footer className="site-footer"><div><strong>arauka.</strong><p>Conectando personas y oficios en La Araucanía y Los Ríos.</p></div><div><span>Villarrica · Pucón · Lican Ray · Panguipulli · Coñaripe</span><small>© {new Date().getFullYear()} ARAUKA · Nombre provisional · Etapa de desarrollo</small></div></footer>{bottomNav()}{authOpen&&<div className="modal-backdrop" onMouseDown={e=>{if(e.target===e.currentTarget)setAuthOpen(false)}}><div className="auth-modal" role="dialog" aria-modal="true" aria-label="Acceso a ARAUKA"><button className="modal-close" onClick={()=>setAuthOpen(false)} aria-label="Cerrar"><X size={20}/></button><div className="auth-icon"><UserCircle2 size={28}/></div><h2>{authKind==='registro'?'Únete a ARAUKA':'Ingresa a ARAUKA'}</h2><p>Es gratis durante el lanzamiento.</p><div className="auth-tabs"><button className={authKind==='registro'?'active':''} onClick={()=>setAuthKind('registro')}>Crear cuenta</button><button className={authKind==='login'?'active':''} onClick={()=>setAuthKind('login')}>Ingresar</button></div><form onSubmit={authenticate}>{authKind==='registro'&&<label className="field">Tu nombre<input required value={authFields.name} onChange={e=>setAuthFields({...authFields,name:e.target.value})}/></label>}<label className="field">Correo electrónico<input required type="email" value={authFields.email} onChange={e=>setAuthFields({...authFields,email:e.target.value})}/></label><label className="field">Contraseña<input required minLength={8} type="password" value={authFields.password} onChange={e=>setAuthFields({...authFields,password:e.target.value})}/></label>{error&&<p role="alert" className="form-error">{error}</p>}<button className="btn btn-primary btn-full" type="submit" disabled={busy}>{busy?'Procesando...':authKind==='registro'?'Registrarme gratis':'Ingresar'}<ArrowRight size={16}/></button></form><p className="form-small">Tus datos se protegen mediante las reglas de acceso de la base de datos.</p></div></div>}</div>
+  return <div className="site"><header className="topbar"><div className="topbar-inner"><button className="logo" onClick={()=>navigate('inicio')} aria-label="ARAUKA, ir al inicio"><span className="brand-mark">A</span><span>arauka<span className="brand-period">.</span><small>conecta tu zona</small></span></button><nav className="top-nav" aria-label="Menú">{navButton('inicio','Inicio')}{navButton('buscar','Profesionales')}{navButton('trabajos',mode==='cliente'?'Mis trabajos':'Oportunidades')}{navButton('cuenta','Mi cuenta')}</nav><div className="top-actions">{configured&&userId&&<button className="notification-trigger" onClick={()=>navigate('cuenta')} aria-label={`Mis avisos: ${notifications.filter(n=>!n.read_at).length} pendientes`}><Bell size={18}/>{notifications.some(n=>!n.read_at)&&<span className="notification-dot"/>}</button>}<button className="current-role" onClick={()=>navigate('cuenta')} title="Cambiar experiencia desde Mi cuenta"><span>{modeLabel(mode)}</span><span className="muted">· Mi cuenta</span></button>{configured&&!userId&&<button className="btn btn-primary btn-sm login-btn" onClick={()=>requestAuth('login')}><LogIn size={15}/> Ingresar</button>}{configured&&userId&&<button className="account-pill" onClick={()=>navigate('cuenta')}><UserCircle2 size={19}/></button>}</div></div></header><main className="main-content"><div className="top-caption">{!configured&&<span className="demo-flag">MODO DEMOSTRACIÓN</span>}<span>{modeDescription}</span></div>{message&&<div role="status" className="global-message"><CheckCircle2 size={19}/>{message}<button onClick={()=>setMessage('')} aria-label="Cerrar mensaje"><X size={15}/></button></div>}{error&&<div role="alert" className="global-error"><CircleHelp size={19}/>{error}<button onClick={()=>setError('')} aria-label="Cerrar error"><X size={15}/></button></div>}{loading?<div className="empty"><span className="spinner"/> Cargando datos de ARAUKA...</div>:screen==='inicio'?renderHome():screen==='buscar'?renderSearch():screen==='publicar'?renderPublish():screen==='trabajos'?renderJobs():screen==='profesional'?renderPro():screen==='detalle'?renderJobDetail():renderAccount()}</main><footer className="site-footer"><div><strong>arauka.</strong><p>Conectando personas y oficios en La Araucanía y Los Ríos.</p></div><div><span>Villarrica · Pucón · Lican Ray · Panguipulli · Coñaripe</span><small>© {new Date().getFullYear()} ARAUKA · Nombre provisional · Etapa de desarrollo</small></div></footer>{bottomNav()}{authOpen&&<div className="modal-backdrop" onMouseDown={e=>{if(e.target===e.currentTarget)closeAuth()}}><div className="auth-modal" role="dialog" aria-modal="true" aria-label="Acceso a ARAUKA"><button className="modal-close" type="button" onClick={closeAuth} aria-label="Cerrar"><X size={20}/></button><div className="auth-icon"><UserCircle2 size={28}/></div><h2>{authKind==='registro'?'Únete a ARAUKA':'Ingresa a ARAUKA'}</h2><p>Es gratis durante el lanzamiento.</p><div className="auth-tabs"><button type="button" className={authKind==='registro'?'active':''} onClick={()=>changeAuthKind('registro')}>Crear cuenta</button><button type="button" className={authKind==='login'?'active':''} onClick={()=>changeAuthKind('login')}>Ingresar</button></div><form onSubmit={authenticate}>{authKind==='registro'&&<label className="field">Tu nombre<input required value={authFields.name} onChange={e=>setAuthFields({...authFields,name:e.target.value})}/></label>}<label className="field">Correo electrónico<input required type="email" value={authFields.email} onChange={e=>setAuthFields({...authFields,email:e.target.value})}/></label><div className="field"><label htmlFor="auth-password">Contraseña</label><div className="password-field"><input id="auth-password" required minLength={8} autoComplete={authKind==='registro'?'new-password':'current-password'} type={showPassword?'text':'password'} value={authFields.password} onChange={e=>setAuthFields({...authFields,password:e.target.value})}/><button type="button" className="password-toggle" aria-label={showPassword?'Ocultar contraseña':'Mostrar contraseña'} aria-pressed={showPassword} onClick={()=>setShowPassword(value=>!value)}>{showPassword?<EyeOff size={19}/>:<Eye size={19}/>}</button></div></div>{authKind==='registro'&&<div className="field"><label htmlFor="auth-confirm-password">Confirmar contraseña</label><div className="password-field"><input id="auth-confirm-password" required minLength={8} autoComplete="new-password" type={showConfirmPassword?'text':'password'} value={confirmPassword} onChange={e=>setConfirmPassword(e.target.value)}/><button type="button" className="password-toggle" aria-label={showConfirmPassword?'Ocultar contraseña':'Mostrar contraseña'} aria-pressed={showConfirmPassword} onClick={()=>setShowConfirmPassword(value=>!value)}>{showConfirmPassword?<EyeOff size={19}/>:<Eye size={19}/>}</button></div></div>}{error&&<p role="alert" className="form-error">{error}</p>}<button className="btn btn-primary btn-full" type="submit" disabled={busy}>{busy?'Procesando...':authKind==='registro'?'Registrarme gratis':'Ingresar'}<ArrowRight size={16}/></button></form><p className="form-small">Tus datos se protegen mediante las reglas de acceso de la base de datos.</p></div></div>}</div>
 }

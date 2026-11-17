@@ -5,7 +5,12 @@
   "type": "module",
   "scripts": {
     "dev": "vite --host 0.0.0.0",
+    "dev:staging": "vite --mode staging --host 0.0.0.0",
     "build": "tsc -b && vite build && node scripts/check-dist-secrets.mjs",
+    "build:staging": "tsc -b && vite build --mode staging && node scripts/check-dist-secrets.mjs",
+    "test": "node --test --experimental-strip-types src/lib/*.test.ts scripts/*.test.mjs",
+    "test:supabase:v09": "node scripts/test-v09-supabase.mjs",
+    "test:supabase:v093": "node scripts/test-v093-supabase.mjs",
     "preview": "vite preview --host 0.0.0.0",
     "typecheck": "tsc --noEmit"
   },

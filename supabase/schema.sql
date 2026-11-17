@@ -224,3 +224,21 @@ as $$
 $$;
 revoke all on function public.get_shared_contact(uuid) from public,anon;
 grant execute on function public.get_shared_contact(uuid) to authenticated;
+
+-- Privilegios SQL minimos del esquema base. RLS sigue decidiendo las filas
+-- visibles y modificables; estos GRANT no sustituyen ninguna policy.
+grant usage on schema public to anon,authenticated,service_role;
+revoke all on table
+  public.profiles,public.jobs,public.interests,public.reviews,public.portfolio,
+  public.verifications,public.private_contacts
+from public,anon,authenticated,service_role;
+
+grant select on public.profiles,public.jobs,public.reviews,public.portfolio,public.verifications to anon;
+
+grant select on public.profiles,public.jobs,public.reviews,public.portfolio,public.verifications to authenticated;
+grant update(display_name,company_name,bio,categories,service_localities) on public.profiles to authenticated;
+grant insert,update on public.jobs to authenticated;
+grant select,insert,update on public.interests to authenticated;
+grant insert on public.reviews to authenticated;
+grant insert,delete on public.portfolio to authenticated;
+grant select,insert,update on public.private_contacts to authenticated;

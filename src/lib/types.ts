@@ -2,12 +2,24 @@ export const LOCALITIES = ['Villarrica', 'Pucón', 'Lican Ray', 'Panguipulli', '
 export const CATEGORIES = ['Electricidad', 'Gasfitería', 'Limpieza', 'Carpintería', 'Jardinería', 'Construcción', 'Portones', 'Pintura', 'Mascotas', 'Muebles', 'Cerrajería', 'Otros'] as const
 export type Locality = typeof LOCALITIES[number]
 export type Category = typeof CATEGORIES[number]
-export type Mode = 'cliente' | 'maestro'
+export type Mode = 'cliente' | 'maestro' | 'empresa'
+export type ProfileKind = 'personal' | 'professional' | 'business' | 'company'
+export type Capability = 'hire' | 'offer'
+export type Experience = {
+  experience: Mode
+  profile_kind: ProfileKind
+  is_primary: boolean
+  public_name: string | null
+  legal_name: string | null
+  verification_status: 'not_applicable' | 'pending' | 'verified' | 'rejected'
+}
 export type Page = 'inicio' | 'buscar' | 'publicar' | 'trabajos' | 'cuenta'
 export type JobStatus = 'open' | 'matched' | 'completed' | 'cancelled'
 
 export type Profile = {
   id: string
+  auth_user_id?: string | null
+  deleted_at?: string | null
   display_name: string
   bio: string
   company_name: string | null
@@ -39,3 +51,23 @@ export type Interest = {
 export type Portfolio = { id: string; pro_id: string; image_path: string; caption: string; created_at: string }
 export type Review = { id: string; job_id: string; client_id: string; pro_id: string; rating: number; comment: string; created_at: string }
 export type Verification = { pro_id: string; identity_verified: boolean; credentials_verified: boolean }
+export type CommercialProfile = {
+  user_id:string
+  profile_kind:ProfileKind
+  public_name:string|null
+  legal_name:string|null
+  tax_id:string|null
+  legal_type:string|null
+  economic_activity:string|null
+  tax_address:string|null
+  municipality:string|null
+  region:string|null
+  representative_name:string|null
+  contact_email:string|null
+  business_phone:string|null
+  coverage:string[]
+  services:string[]
+  verification_status:Experience['verification_status']
+  verification_reviewed_at:string|null
+}
+export type CompanyDocument = {id:string;user_id:string;storage_path:string;document_type:string;created_at:string}
