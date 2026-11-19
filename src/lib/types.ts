@@ -51,6 +51,21 @@ export type Interest = {
 export type Portfolio = { id: string; pro_id: string; image_path: string; caption: string; created_at: string }
 export type Review = { id: string; job_id: string; client_id: string; pro_id: string; rating: number; comment: string; created_at: string }
 export type Verification = { pro_id: string; identity_verified: boolean; credentials_verified: boolean }
+export type PublicProviderIdentity = 'provider' | 'verified_company'
+export type PublicProviderPortfolioItem = { id:string; imagePath:string; caption:string }
+export type PublicProviderReview = { id:string; rating:number; comment:string; createdAt:string }
+export type PublicProvider = {
+  id:string
+  publicName:string
+  description:string
+  services:string[]
+  serviceAreas:string[]
+  identity:PublicProviderIdentity
+  portfolio:PublicProviderPortfolioItem[]
+  reviews:PublicProviderReview[]
+  reviewCount:number
+  averageRating:number|null
+}
 export type CommercialProfile = {
   user_id:string
   profile_kind:ProfileKind
