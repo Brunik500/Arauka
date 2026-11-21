@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState, type FormEvent } from 'react'
 import { ArrowLeft, ArrowRight, Bell, BriefcaseBusiness, Check, CheckCircle2, ChevronRight, Clock3, Compass, Eye, EyeOff, Hammer, HeartHandshake, LayoutDashboard, LockKeyhole, LogIn, LogOut, MapPin, Menu, MessageCircle, Plus, Search, ShieldCheck, SlidersHorizontal, Sparkles, Star, UserCircle2, Users, X, ImagePlus, Phone, CircleHelp } from 'lucide-react'
 import { supabase, configured, configurationError, isStaging } from './lib/supabase'
-import { CATEGORIES, LOCALITIES, type CommercialProfile, type CompanyDocument, type Experience, type Job, type Interest, type Mode, type Page, type Portfolio, type Profile, type Review, type Verification } from './lib/types'
+import { CATEGORIES, LOCALITIES, type CommercialProfile, type CompanyDocument, type Experience, type Job, type Interest, type Mode, type Page, type Portfolio, type Profile, type PublicProviderRpcRow, type Review, type Verification } from './lib/types'
 import { canUseExperience, experienceLabel, experienceNavigationMessage, experiencePanelLabel, legacyExperiences, primaryExperience, validateProfessionalActivation } from './lib/identity'
 import { isValidRut, normalizeRut } from './lib/rut'
 import { profilePatchForExperience } from './lib/profileForms'
@@ -10,7 +10,7 @@ import { modeForRegistrationChoice, registrationChoiceForMode, registrationChoic
 import {AccountDeletionPanel} from './components/AccountDeletionPanel'
 import {PublicProviderCard} from './components/PublicProviderCard'
 import {PublicProviderProfile} from './components/PublicProviderProfile'
-import {filterPublicProviders, presentPublicProvider} from './lib/publicProviders'
+import {filterPublicProviders, parsePublicProviderRows, presentPublicProvider} from './lib/publicProviders'
 
 type Store = { profiles: Profile[]; jobs: Job[]; interests: Interest[]; reviews: Review[]; portfolio: Portfolio[]; verifications: Verification[] }
 type Screen = Page | 'profesional' | 'detalle'
@@ -43,6 +43,11 @@ const initialDemo: Store = {
   jobs: [{ id:'demo-trabajo-1',client_id:'demo-otrocliente',title:'Reparación de portón metálico',description:'Necesito revisar las ruedas y el deslizamiento de un portón corredera. Se pueden enviar fotos al coordinar.',category:'Portones',locality:'Villarrica',status:'open',selected_pro_id:null,client_contact_consent:false,created_at:new Date().toISOString() }],
   interests:[],reviews:[],portfolio:[],verifications:[]
 }
+const demoPublicProviderRows:PublicProviderRpcRow[]=[
+  {user_id:demoPro,profile_kind:'business',public_name:'NOBRO',bio:initialDemo.profiles[1].bio,services:[...initialDemo.profiles[1].categories],coverage:[...initialDemo.profiles[1].service_localities],is_company_verified:false},
+  {user_id:'demo-limpieza',profile_kind:'business',public_name:'Limpieza local · ejemplo',bio:initialDemo.profiles[2].bio,services:[...initialDemo.profiles[2].categories],coverage:[...initialDemo.profiles[2].service_localities],is_company_verified:false},
+  {user_id:'demo-tecnico',profile_kind:'professional',public_name:'Profesional de ejemplo',bio:initialDemo.profiles[3].bio,services:[...initialDemo.profiles[3].categories],coverage:[...initialDemo.profiles[3].service_localities],is_company_verified:false}
+]
 function readDemo(): Store { try { const raw = localStorage.getItem('arauka-v04-demo'); return raw ? JSON.parse(raw) as Store : initialDemo } catch { return initialDemo } }
 function CategoryIcon({ category, size=21 }: {category: string; size?:number}) {
   if (category === 'Limpieza') return <Sparkles size={size}/>
@@ -99,8 +104,9 @@ export default function App(){
   const [companyProfile,setCompanyProfile]=useState<CommercialProfile|null>(null)
   const [companyDocuments,setCompanyDocuments]=useState<CompanyDocument[]>([])
   const [companyForm,setCompanyForm]=useState({...emptyCompanyForm})
-  const [verifiedCompanyIds,setVerifiedCompanyIds]=useState<string[]>([])
+  const [providerRows,setProviderRows]=useState<PublicProviderRpcRow[]>(configured?[]:demoPublicProviderRows)
   const [providerLoadError,setProviderLoadError]=useState(false)
+  const [providerRetrying,setProviderRetrying]=useState(false)
   const data = configured ? store : demo
   const currentId = configured ? userId : mode==='cliente'?demoClient:demoPro
   const currentProfile=data.profiles.find(p=>p.id===currentId)
@@ -172,15 +178,15 @@ export default function App(){
   const refresh = useCallback(async ()=>{
     if(!supabase) return
     const {data:{user}}=await supabase.auth.getUser()
-    const [p,j,i,r,pt,v,x,vc]=await Promise.all([
-      supabase.from('profiles').select('id,display_name,company_name,bio,is_professional,categories,service_localities,created_at'),supabase.from('jobs').select('*'),
-      user ? supabase.from('interests').select('*') : Promise.resolve({data:[],error:null}),
+    const [p,j,i,r,pt,v,x,providers]=await Promise.all([
+      supabase.from('profiles').select('id,display_name,company_name,bio,is_professional,categories,service_localities,created_at'),supabase.from('jobs').select('id,client_id,title,description,category,locality,status,selected_pro_id,client_contact_consent,created_at'),
+      user ? supabase.from('interests').select('id,job_id,pro_id,note,pro_contact_consent,created_at') : Promise.resolve({data:[],error:null}),
       supabase.from('reviews').select('id,job_id,client_id,pro_id,rating,comment,created_at'),supabase.from('portfolio').select('id,pro_id,image_path,caption,created_at'),
       supabase.from('verifications').select('pro_id,identity_verified,credentials_verified'),
-      user ? supabase.from('my_account_experiences').select('*') : Promise.resolve({data:[],error:null}),
-      supabase.from('verified_companies').select('user_id')
+      user ? supabase.from('my_account_experiences').select('experience,profile_kind,is_primary,public_name,legal_name,verification_status') : Promise.resolve({data:[],error:null}),
+      supabase.rpc('list_public_providers')
     ])
-    const failure=[p,j,i,r,pt,v,vc].find(x=>x.error)?.error
+    const failure=[p,j,i,r,pt,v].find(x=>x.error)?.error
     if(failure) throw failure
     const {data:{user:latestUser}}=await supabase.auth.getUser()
     if(latestUser?.id!==user?.id)return
@@ -188,8 +194,21 @@ export default function App(){
     setStore({profiles,jobs:j.data as Job[] ?? [],interests:i.data as Interest[] ?? [],reviews:r.data as Review[] ?? [],portfolio:pt.data as Portfolio[] ?? [],verifications:v.data as Verification[] ?? []})
     const own=profiles.find(profile=>profile.id===user?.id)
     setExperiences(x.error?legacyExperiences(own):(x.data as Experience[]??[]))
-    setVerifiedCompanyIds(vc.error?[]:(vc.data??[]).map(item=>item.user_id as string))
+    try{
+      if(providers.error)throw providers.error
+      setProviderRows(parsePublicProviderRows(providers.data??[]));setProviderLoadError(false)
+    }catch{setProviderRows([]);setProviderLoadError(true)}
   },[])
+
+  const retryPublicProviders=async()=>{
+    if(!supabase||providerRetrying)return
+    setProviderRetrying(true)
+    try{
+      const {data,error}=await supabase.rpc('list_public_providers')
+      if(error)throw error
+      setProviderRows(parsePublicProviderRows(data??[]));setProviderLoadError(false)
+    }catch{setProviderRows([]);setProviderLoadError(true)}finally{setProviderRetrying(false)}
+  }
   useEffect(()=>{
     if(!supabase) return
     const client=supabase
@@ -211,7 +230,7 @@ export default function App(){
     if(!supabase||!userId){setNotifications([]);return}
     const client=supabase
     let alive=true
-    const load=async()=>{const {data,error}=await client.from('notifications').select('*').order('created_at',{ascending:false}).limit(40);if(alive&&!error)setNotifications(data as NotificationItem[]??[])}
+    const load=async()=>{const {data,error}=await client.from('notifications').select('id,recipient_id,job_id,kind,title,body,read_at,created_at').order('created_at',{ascending:false}).limit(40);if(alive&&!error)setNotifications(data as NotificationItem[]??[])}
     void load()
     const interval=setInterval(()=>void load(),30000)
     const onFocus=()=>void load()
@@ -241,8 +260,8 @@ export default function App(){
     if(!supabase||!userId||!experiences.some(item=>item.experience==='empresa')){setCompanyProfile(null);setCompanyDocuments([]);setCompanyForm({...emptyCompanyForm});return}
     let active=true
     Promise.all([
-      supabase.from('commercial_profiles').select('*').eq('user_id',userId).maybeSingle(),
-      supabase.from('company_documents').select('*').eq('user_id',userId).order('created_at',{ascending:false})
+      supabase.from('commercial_profiles').select('user_id,profile_kind,public_name,legal_name,tax_id,legal_type,economic_activity,tax_address,municipality,region,representative_name,contact_email,business_phone,coverage,services,verification_status,verification_reviewed_at').eq('user_id',userId).maybeSingle(),
+      supabase.from('company_documents').select('id,user_id,storage_path,document_type,created_at').eq('user_id',userId).order('created_at',{ascending:false})
     ]).then(([profile,documents])=>{
       if(!active)return
       if(profile.error){warn(profile.error.message);return}
@@ -478,12 +497,12 @@ export default function App(){
       const path=`${userId}/${crypto.randomUUID()}.${extension}`
       const {error:uploadError}=await supabase.storage.from('company-documents').upload(path,file,{contentType:file.type,upsert:false})
       if(uploadError)throw uploadError
-      const {data,error}=await supabase.from('company_documents').insert({user_id:userId,storage_path:path,document_type:file.type}).select('*').single()
+      const {data,error}=await supabase.from('company_documents').insert({user_id:userId,storage_path:path,document_type:file.type}).select('id,user_id,storage_path,document_type,created_at').single()
       if(error)throw error
       setCompanyDocuments(previous=>[data as CompanyDocument,...previous]);notify('Documento privado recibido para revisión.')
     }catch(e){warn(`No se pudo subir el documento: ${e instanceof Error?e.message:String(e)}`)}finally{setBusy(false)}
   }
-  const publicProviders=useMemo(()=>data.profiles.filter(profile=>profile.is_professional).map(profile=>presentPublicProvider({profile,portfolio:data.portfolio,reviews:data.reviews,verifiedCompanyIds})),[data.profiles,data.portfolio,data.reviews,verifiedCompanyIds])
+  const publicProviders=useMemo(()=>providerRows.map(row=>presentPublicProvider({row,portfolio:data.portfolio,reviews:data.reviews})),[providerRows,data.portfolio,data.reviews])
   const visibleProviders=useMemo(()=>filterPublicProviders(publicProviders,filterQuery,filterCategory,filterLocality),[publicProviders,filterQuery,filterCategory,filterLocality])
   const selectedProvider=publicProviders.find(provider=>provider.id===selectedPro)
   const imageUrl=(path:string)=>supabase?.storage.from('portfolio').getPublicUrl(path).data.publicUrl || ''
@@ -496,20 +515,20 @@ export default function App(){
     <div className="job-foot"><span><MapPin size={14}/>{j.locality}</span><span><Clock3 size={14}/>{formatDate(j.created_at)}</span></div>
     <div className="card-foot"><span className="muted tiny">{asPro?(responded?'Ya manifestaste interés':'Oportunidad local'):`${data.interests.filter(i=>i.job_id===j.id).length} profesionales interesados`}</span><button className="btn btn-soft btn-sm" onClick={()=>openJob(j.id)}>Ver detalle <ChevronRight size={15}/></button></div>
   </article>}
-  function bottomNav(){const entries: {key:Page;icon:typeof Compass;label:string}[]=mode==='cliente'?[{key:'inicio',icon:Compass,label:'Inicio'},{key:'buscar',icon:Search,label:'Buscar'},{key:'trabajos',icon:BriefcaseBusiness,label:'Mis trabajos'},{key:'cuenta',icon:UserCircle2,label:'Mi cuenta'}]:mode==='empresa'?[{key:'inicio',icon:Compass,label:'Inicio'},{key:'trabajos',icon:BriefcaseBusiness,label:'Oportunidades'},{key:'buscar',icon:Users,label:'Directorio'},{key:'cuenta',icon:UserCircle2,label:'Mi empresa'}]:[{key:'inicio',icon:Compass,label:'Inicio'},{key:'trabajos',icon:BriefcaseBusiness,label:'Oportunidades'},{key:'buscar',icon:Users,label:'Directorio'},{key:'cuenta',icon:UserCircle2,label:activeExperience?.profile_kind==='business'?'Mi negocio':'Mi perfil'}]
+  function bottomNav(){const entries: {key:Page;icon:typeof Compass;label:string}[]=mode==='cliente'?[{key:'inicio',icon:Compass,label:'Inicio'},{key:'buscar',icon:Search,label:'Prestadores'},{key:'trabajos',icon:BriefcaseBusiness,label:'Mis trabajos'},{key:'cuenta',icon:UserCircle2,label:'Mi cuenta'}]:mode==='empresa'?[{key:'inicio',icon:Compass,label:'Inicio'},{key:'trabajos',icon:BriefcaseBusiness,label:'Oportunidades'},{key:'buscar',icon:Users,label:'Prestadores'},{key:'cuenta',icon:UserCircle2,label:'Mi empresa'}]:[{key:'inicio',icon:Compass,label:'Inicio'},{key:'trabajos',icon:BriefcaseBusiness,label:'Oportunidades'},{key:'buscar',icon:Users,label:'Prestadores'},{key:'cuenta',icon:UserCircle2,label:activeExperience?.profile_kind==='business'?'Mi negocio':'Mi perfil'}]
     return <nav className="bottom-nav" aria-label="Navegación principal">{entries.map(({key,icon:Icon,label})=><button key={key} className={screen===key?'active':''} onClick={()=>navigate(key)}><Icon size={20}/><span>{label}</span></button>)}</nav>
   }
-  function navButton(key:Page,label:string){return <button className={`toplink ${screen===key?'active':''}`} onClick={()=>navigate(key)}>{label}</button>}
+  function navButton(key:Page,label:string){const visibleLabel=key==='buscar'?'Prestadores':label;return <button className={`toplink ${screen===key?'active':''}`} onClick={()=>navigate(key)}>{visibleLabel}</button>}
   function renderHome(){return <>
     <section className="hero"><div className="hero-copy"><span className="hero-kicker"><span className="pulse-dot"/> Villarrica y alrededores</span><h1>{mode==='cliente'?<>La solución que buscas, <em>más cerca.</em></>:mode==='empresa'?<>Tu empresa, preparada para <em>conectar.</em></>:<>Tu próximo trabajo puede estar <em>aquí cerca.</em></>}</h1><p>{mode==='cliente'?'Encuentra maestros y servicios de tu zona, revisa sus perfiles y publica lo que necesitas sin pagar por usar ARAUKA.':mode==='empresa'?'Presenta tus servicios, administra tus antecedentes empresariales y encuentra oportunidades con una identidad claramente diferenciada.':'Descubre solicitudes de clientes de tu zona, presenta tu experiencia y conecta con nuevas oportunidades. Gratis durante el lanzamiento.'}</p>
-    <div className="hero-actions">{mode==='cliente'?<><button className="btn btn-accent" onClick={()=>navigate('publicar')}><Plus size={19}/> Publicar un trabajo</button><button className="btn btn-outline-light" onClick={()=>navigate('buscar')}>Buscar profesionales <ArrowRight size={17}/></button></>:mode==='empresa'?<><button className="btn btn-accent" onClick={()=>navigate('cuenta')}>Administrar mi empresa <ArrowRight size={17}/></button><button className="btn btn-outline-light" onClick={()=>navigate('trabajos')}>Ver oportunidades</button></>:<><button className="btn btn-accent" onClick={()=>navigate('trabajos')}>Ver oportunidades <ArrowRight size={17}/></button><button className="btn btn-outline-light" onClick={()=>navigate('cuenta')}>Editar mi perfil</button></>}</div></div><div className="hero-decoration" aria-hidden="true"><div className="halo halo-one"/><div className="halo halo-two"/><div className="hero-badge hero-badge-one"><Hammer size={20}/> Oficios locales</div><div className="hero-badge hero-badge-two"><HeartHandshake size={19}/> Conexiones reales</div></div></section>
+    <div className="hero-actions">{mode==='cliente'?<><button className="btn btn-accent" onClick={()=>navigate('publicar')}><Plus size={19}/> Publicar un trabajo</button><button className="btn btn-outline-light" onClick={()=>navigate('buscar')}>Buscar prestadores <ArrowRight size={17}/></button></>:mode==='empresa'?<><button className="btn btn-accent" onClick={()=>navigate('cuenta')}>Administrar mi empresa <ArrowRight size={17}/></button><button className="btn btn-outline-light" onClick={()=>navigate('trabajos')}>Ver oportunidades</button></>:<><button className="btn btn-accent" onClick={()=>navigate('trabajos')}>Ver oportunidades <ArrowRight size={17}/></button><button className="btn btn-outline-light" onClick={()=>navigate('cuenta')}>Editar mi perfil</button></>}</div></div><div className="hero-decoration" aria-hidden="true"><div className="halo halo-one"/><div className="halo halo-two"/><div className="hero-badge hero-badge-one"><Hammer size={20}/> Oficios locales</div><div className="hero-badge hero-badge-two"><HeartHandshake size={19}/> Conexiones reales</div></div></section>
     {banner}
     <section className="section"><div className="section-heading"><div><span className="eyebrow">ENCUENTRA LO QUE NECESITAS</span><h2>Servicios para tu día a día</h2></div><button className="text-link" onClick={()=>navigate('buscar')}>Ver todos <ArrowRight size={16}/></button></div><div className="category-grid">{CATEGORIES.slice(0,8).map(c=><button className="category-tile" key={c} onClick={()=>{setFilterCategory(c);navigate('buscar')}}><span className="category-icon"><CategoryIcon category={c}/></span><span>{c}</span><ChevronRight size={15} className="cat-arrow"/></button>)}</div></section>
-    <section className="section"><div className="section-heading"><div><span className="eyebrow">PERSONAS Y OFICIOS</span><h2>Prestadores en ARAUKA</h2></div><button className="text-link" onClick={()=>navigate('buscar')}>Explorar <ArrowRight size={16}/></button></div><div className="cards-grid">{publicProviders.slice(0,3).map(providerCard)}</div><p className="hint">{configured?'Los perfiles provienen de la base de datos.':'Perfiles de ejemplo: aún no representan verificaciones ni recomendaciones reales.'}</p></section>
+    <section className="section"><div className="section-heading"><div><span className="eyebrow">PERSONAS Y OFICIOS</span><h2>Prestadores en ARAUKA</h2></div><button className="text-link" onClick={()=>navigate('buscar')}>Explorar <ArrowRight size={16}/></button></div><div className="cards-grid">{publicProviders.slice(0,3).map(providerCard)}</div><p className="hint">{configured?'Identidades obtenidas desde la proyección pública segura de ARAUKA.':'Perfiles de ejemplo: aún no representan verificaciones ni recomendaciones reales.'}</p></section>
     <section className="steps-section"><div className="section-heading"><div><span className="eyebrow">ASÍ FUNCIONA</span><h2>Simple desde el primer contacto</h2></div></div><div className="steps-grid">{[['01','Cuenta qué necesitas','Publica un trabajo o busca directamente por oficio y localidad.'],['02','Conoce opciones','Los profesionales interesados responden y tú eliges a quién contactar.'],['03','Coordinen con confianza','El contacto se comparte solo con autorización mutua.']].map(([n,title,desc])=><div className="step-card" key={n}><span>{n}</span><h3>{title}</h3><p>{desc}</p></div>)}</div></section>
   </>}
-  function renderSearch(){return <section className="page"><div className="page-heading"><span className="eyebrow">DIRECTORIO LOCAL</span><h1>Encuentra prestadores</h1><p>Explora servicios, trabajos publicados y zonas de atención.</p></div>{providerLoadError?<div className="empty provider-error" role="alert"><CircleHelp size={34}/><h3>No pudimos cargar el directorio</h3><p>Comprueba tu conexión e inténtalo nuevamente. No mostramos resultados vacíos cuando ocurre un error.</p></div>:<><div className="filter-panel"><div className="search-box"><Search size={19}/><input aria-label="Buscar prestadores" placeholder="Nombre, oficio o especialidad" value={filterQuery} onChange={e=>setFilterQuery(e.target.value)}/></div><label>Oficio<select value={filterCategory} onChange={e=>setFilterCategory(e.target.value)}><option value="">Todos los servicios</option>{CATEGORIES.map(c=><option key={c}>{c}</option>)}</select></label><label>Localidad<select value={filterLocality} onChange={e=>setFilterLocality(e.target.value)}><option value="">Todas las localidades</option>{LOCALITIES.map(c=><option key={c}>{c}</option>)}</select></label></div><div className="section-heading compact"><h2>{visibleProviders.length} {visibleProviders.length===1?'prestador':'prestadores'}</h2><span className="muted tiny">{configured?'Resultados actuales':'Resultados de demostración'}</span></div><div className="cards-grid">{visibleProviders.map(providerCard)}</div>{!visibleProviders.length&&<div className="empty"><Search size={34}/><h3>No encontramos perfiles con estos filtros</h3><p>Prueba otro oficio o localidad. También puedes publicar una solicitud abierta.</p><button className="btn btn-primary" onClick={()=>navigate('publicar')}>Publicar trabajo</button></div>}</>}</section>}
-  function renderPro(){if(providerLoadError)return <div className="empty provider-error" role="alert"><CircleHelp size={34}/><h3>No pudimos cargar este perfil</h3><p>Vuelve al directorio e inténtalo nuevamente.</p><button className="btn btn-soft" onClick={()=>navigate('buscar')}>Volver al directorio</button></div>;if(!selectedProvider)return <div className="empty"><Search size={34}/><h3>Perfil inexistente</h3><p>El perfil solicitado no está disponible o dejó de ser público.</p><button className="btn btn-soft" onClick={()=>navigate('buscar')}>Volver al directorio</button></div>;return <PublicProviderProfile provider={selectedProvider} imageUrl={imageUrl} onBack={()=>navigate('buscar')} onRequest={()=>{setJobForm(p=>({...p,category:selectedProvider.services[0]||''}));navigate('publicar')}}/>}
+  function renderSearch(){const filtered=Boolean(filterQuery||filterCategory||filterLocality);return <section className="page"><div className="page-heading"><span className="eyebrow">DIRECTORIO LOCAL</span><h1>Encuentra prestadores</h1><p>Explora servicios, trabajos publicados y zonas de atención.</p></div>{providerLoadError?<div className="empty provider-error" role="alert"><CircleHelp size={34}/><h3>No pudimos cargar el directorio</h3><p>Comprueba tu conexión e inténtalo nuevamente. No reconstruimos identidades con datos incompletos.</p><button type="button" className="btn btn-soft" disabled={providerRetrying} onClick={()=>void retryPublicProviders()}>{providerRetrying?'Reintentando...':'Reintentar'}</button></div>:<><div className="filter-panel"><div className="search-box"><Search size={19}/><input aria-label="Buscar prestadores" placeholder="Nombre, oficio o especialidad" value={filterQuery} onChange={e=>setFilterQuery(e.target.value)}/></div><label>Oficio<select value={filterCategory} onChange={e=>setFilterCategory(e.target.value)}><option value="">Todos los servicios</option>{CATEGORIES.map(c=><option key={c}>{c}</option>)}</select></label><label>Localidad<select value={filterLocality} onChange={e=>setFilterLocality(e.target.value)}><option value="">Todas las localidades</option>{LOCALITIES.map(c=><option key={c}>{c}</option>)}</select></label></div><div className="section-heading compact"><h2>{visibleProviders.length} {visibleProviders.length===1?'prestador':'prestadores'}</h2><span className="muted tiny">{configured?'Resultados actuales':'Resultados de demostración'}</span></div><div className="cards-grid">{visibleProviders.map(providerCard)}</div>{!visibleProviders.length&&<div className="empty"><Search size={34}/><h3>{filtered?'No encontramos perfiles con estos filtros':'Aún no hay prestadores públicos'}</h3><p>{filtered?'Prueba otro oficio o localidad. También puedes publicar una solicitud abierta.':'Cuando existan experiencias comerciales activas, aparecerán en este directorio.'}</p>{filtered&&<button className="btn btn-primary" onClick={()=>navigate('publicar')}>Publicar trabajo</button>}</div>}</>}</section>}
+  function renderPro(){if(providerLoadError)return <div className="empty provider-error" role="alert"><CircleHelp size={34}/><h3>No pudimos cargar este perfil</h3><p>La identidad pública no está disponible en este momento.</p><button type="button" className="btn btn-soft" disabled={providerRetrying} onClick={()=>void retryPublicProviders()}>{providerRetrying?'Reintentando...':'Reintentar'}</button><button type="button" className="text-link" onClick={()=>navigate('buscar')}>Volver al directorio</button></div>;if(!selectedProvider)return <div className="empty"><Search size={34}/><h3>Perfil inexistente</h3><p>El perfil solicitado no está disponible o dejó de ser público.</p><button className="btn btn-soft" onClick={()=>navigate('buscar')}>Volver al directorio</button></div>;return <PublicProviderProfile provider={selectedProvider} imageUrl={imageUrl} onBack={()=>navigate('buscar')} onRequest={()=>{setJobForm(p=>({...p,category:selectedProvider.services[0]||''}));navigate('publicar')}}/>}
   function renderPublish(){return <section className="page narrow"><div className="page-heading"><span className="eyebrow">SOLICITUD DE SERVICIO</span><h1>Publica un trabajo</h1><p>Cuéntanos qué necesitas. Los maestros de tu zona podrán manifestar interés.</p></div><form className="form-card" noValidate onSubmit={postJob}><div className="form-grid"><label className="field">Tipo de servicio<select value={jobForm.category} onChange={e=>setJobForm({...jobForm,category:e.target.value})}><option value="">Seleccionar oficio</option>{CATEGORIES.map(c=><option key={c}>{c}</option>)}</select></label><label className="field">Localidad<select value={jobForm.locality} onChange={e=>setJobForm({...jobForm,locality:e.target.value})}>{LOCALITIES.map(c=><option key={c}>{c}</option>)}</select></label></div><label className="field">¿Qué necesitas hacer?<input value={jobForm.title} onChange={e=>setJobForm({...jobForm,title:e.target.value})} placeholder="Ej.: Reparar un portón de corredera"/></label><label className="field">Describe tu trabajo<textarea rows={5} value={jobForm.description} onChange={e=>setJobForm({...jobForm,description:e.target.value})} placeholder="Explica el trabajo, medidas aproximadas y detalles importantes..."/></label><div className="notice"><LockKeyhole size={18}/><span>No incluyas tu teléfono, correo ni dirección exacta. El contacto se habilita únicamente con aceptación de ambas partes.</span></div>{jobError&&<p role="alert" className="form-error">{jobError}</p>}<button className="btn btn-primary btn-full" type="submit" disabled={busy}><Plus size={18}/>{busy?'Publicando...':configured?'Publicar trabajo gratis':'Publicar solicitud de prueba'}</button><p className="form-small">{configured?'Tu publicación se guarda en Supabase.':'Demostración: tu solicitud se guarda solo en este navegador.'}</p></form></section>}
   function renderJobs(){if(mode==='cliente')return <section className="page"><div className="page-heading split"><div><span className="eyebrow">TU ACTIVIDAD</span><h1>Mis trabajos</h1><p>Revisa solicitudes, interesados y estados de tus trabajos.</p></div><button className="btn btn-primary" onClick={()=>navigate('publicar')}><Plus size={18}/> Publicar trabajo</button></div>{!signedIn?<div className="empty"><LockKeyhole size={32}/><h3>Ingresa para ver tus solicitudes</h3><button className="btn btn-primary" onClick={()=>requestAuth()}>Crear cuenta gratuita</button></div>:<div className="cards-grid">{myJobs.map(j=>jobCard(j))}</div>}{signedIn&&!myJobs.length&&<div className="empty"><BriefcaseBusiness size={34}/><h3>Todavía no publicas trabajos</h3><p>Tu primera publicación es gratis.</p><button className="btn btn-primary" onClick={()=>navigate('publicar')}>Crear solicitud</button></div>}</section>
     return <section className="page"><div className="page-heading"><span className="eyebrow">PANEL DEL MAESTRO</span><h1>Oportunidades cerca de ti</h1><p>Explora solicitudes que coinciden con tus oficios y zonas de cobertura.</p></div>{!signedIn?<div className="empty"><LockKeyhole size={32}/><h3>Crea tu cuenta para responder a solicitudes</h3><button className="btn btn-primary" onClick={()=>requestAuth()}>Registrarme gratis</button></div>:!isPro?<div className="empty"><Hammer size={34}/><h3>Activa tu perfil profesional</h3><p>Es gratuito. Después selecciona tus oficios y localidades.</p><button className="btn btn-primary" onClick={activatePro}>Activar perfil de maestro</button></div>:<><div className="mini-metrics"><div><strong>{openOpportunities.length}</strong><span>Oportunidades</span></div><div><strong>{myInterests.length}</strong><span>Respuestas enviadas</span></div><div><strong>{myInterests.filter(i=>data.jobs.some(j=>j.id===i.job_id&&j.selected_pro_id===currentId)).length}</strong><span>Seleccionado</span></div></div><div className="section-heading compact"><h2>Solicitudes para ti</h2><span className="muted tiny">Según tus oficios y zonas</span></div><div className="cards-grid">{openOpportunities.map(j=>jobCard(j,true))}</div>{!openOpportunities.length&&<div className="empty"><Bell size={32}/><h3>No hay solicitudes nuevas por ahora</h3><p>Revisa tus oficios y zonas de cobertura en Mi perfil.</p><button className="btn btn-soft" onClick={()=>navigate('cuenta')}>Editar perfil</button></div>}<div className="section-heading compact"><h2>Mis postulaciones</h2></div><div className="cards-grid">{myInterests.map(i=>data.jobs.find(j=>j.id===i.job_id)).filter((j):j is Job=>Boolean(j)).map(j=>jobCard(j,true))}</div>{!myInterests.length&&<p className="muted">Aún no has manifestado interés en trabajos.</p>}</>}</section>}

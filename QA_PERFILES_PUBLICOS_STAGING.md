@@ -1,45 +1,59 @@
-# QA visual — Perfiles públicos Fase 1
+# Cierre de QA — Perfiles públicos Fase 2
 
-Esta guía valida el frontend contra `arauka-staging`. No autoriza cambios SQL, despliegues ni el uso de claves administrativas.
+Entorno revisado: `arauka-staging` (`qviiiomipsulvjpstyzw`). Esta evidencia no autoriza despliegues ni cambios en producción.
 
-## Preparación
+## Pruebas automatizadas
 
-1. Confirmar que `.env.staging.local` contiene únicamente la URL de Staging y una clave pública compatible con navegador.
-2. Ejecutar `npm.cmd run dev:staging` y abrir la URL local indicada por Vite.
-3. Confirmar la señal visual **STAGING · MODO DE PRUEBA** antes de iniciar sesión o usar datos ficticios autorizados.
-4. Probar a 360 px de ancho y en escritorio. No usar datos personales reales en filtros, trabajos ni perfiles.
+La validación local cubre:
 
-## Directorio
+- Contrato tipado de los siete campos de `list_public_providers()`.
+- Identidades `professional`, `business` y `company` derivadas únicamente de la RPC.
+- Exclusión de Cliente puro.
+- Empresa pendiente sin insignia y Empresa aprobada con una sola insignia.
+- Privacidad de la proyección y ausencia de credenciales administrativas en frontend.
+- Estados de error, reintento, directorio vacío, filtros sin resultados y perfil inexistente.
+- Navegación, persistencia de filtros, fallback de imágenes y reglas móviles.
+- Etiqueta visible **Prestadores** sin cambiar la ruta `buscar`.
+- Presentación vacía específica para Profesional, Negocio y Empresa, preservando biografías reales.
 
-- Abrir **Profesionales/Directorio** desde Cliente, Profesional/Negocio y Empresa.
-- Confirmar que cada tarjeta muestra solamente nombre público, servicios, zona, presentación, fotografías públicas y evaluaciones reales.
-- Un perfil sin identidad pública verificable debe decir **Prestador**. El nombre comercial nunca debe convertirlo visualmente en Empresa.
-- **Empresa verificada** debe aparecer solamente para un `user_id` devuelto por `verified_companies`.
-- Una empresa pendiente no debe mostrar insignia ni mensajes negativos sobre su verificación.
-- Probar búsqueda por nombre/oficio, filtro de especialidad y filtro de localidad; limpiar filtros y comprobar que reaparecen los resultados.
-- Forzar una combinación sin coincidencias y comprobar el estado **No encontramos perfiles con estos filtros**.
+Resultado local de cierre: **113/113 pruebas aprobadas**, `typecheck` aprobado, build aprobado con escaneo de secretos correcto y `git diff --check` aprobado. La advertencia de Vite por un chunk superior a 500 kB permanece como optimización no bloqueante.
 
-## Detalle y navegación
+## QA visual comprobado en Staging
 
-- Abrir una tarjeta, verificar que la URL conserva `/#/{experiencia}/pro/{id}` y volver con **Volver al directorio**.
-- Confirmar que filtros y resultados permanecen al regresar dentro de la misma sesión.
-- Abrir manualmente un ID inexistente y comprobar el estado **Perfil inexistente**, sin confundirlo con un fallo de red.
-- Desde el detalle, usar **Solicitar servicio** y verificar que prepara la categoría sin revelar contactos.
-- Confirmar que teléfonos, correos, RUT, dirección tributaria, representante, documentos y datos administrativos nunca aparecen.
+- El directorio mostró 5 prestadores y 5 identidades reales distintas.
+- Distribución observada: 1 Profesional independiente, 3 Negocios independientes y 1 Empresa.
+- No apareció ninguna insignia **Empresa verificada**, de acuerdo con los datos actuales.
+- El directorio fue revisado correctamente en escritorio.
+- El perfil de Empresa fue revisado correctamente en escritorio y a 360 px.
+- La acción **Solicitar servicio** permaneció visible en móvil.
+- Cliente puro no apareció entre los cinco resultados observados.
 
-## Fotografías y evaluaciones
+## Error y recuperación comprobados
 
-- Revisar un perfil con fotografía válida y otro sin fotografías.
-- Simular una URL de imagen rota mediante las herramientas del navegador y confirmar el fallback **Imagen no disponible**.
-- Un perfil sin evaluaciones no debe mostrar promedio, conteo ni evaluaciones inventadas.
-- Un perfil con evaluaciones debe mostrar exclusivamente registros existentes, su puntuación y fecha.
+- Se bloqueó intencionalmente la petición a `list_public_providers` mediante DevTools.
+- La interfaz mostró el estado controlado de error, sin reconstruir identidades mediante heurísticas.
+- Después de retirar el bloqueo se utilizó **Reintentar**.
+- La petición respondió HTTP 200 y se recuperaron los cinco prestadores.
+- La regla de bloqueo de DevTools fue eliminada al finalizar la prueba.
 
-## Móvil y accesibilidad
+## Pruebas aún no ejecutadas o sin evidencia suficiente
 
-- A 360 px, confirmar que no existe desplazamiento horizontal y que nombre, insignia, zonas y botones no se superponen.
-- Navegar con teclado por filtros, tarjetas, regreso y solicitud de servicio; verificar foco y etiquetas accesibles.
-- Confirmar que los botones principales mantienen un área táctil cómoda y que las imágenes poseen texto alternativo.
+- Visualización de fotografías reales y fallo real de una fotografía remota.
+- Presentación de una Empresa realmente verificada; actualmente existen cero.
+- Directorio remoto realmente vacío; el estado está cubierto por pruebas automatizadas, no por datos actuales de Staging.
+- Revisión visual exhaustiva en todos los anchos, navegadores y sistemas operativos. Solo constan escritorio y el perfil de Empresa a 360 px.
+- Revisión manual completa de cada uno de los cinco perfiles en todos los tamaños.
+- Pruebas con tecnologías de asistencia reales; existen controles automatizados y atributos accesibles, pero no una auditoría manual completa con lector de pantalla.
 
-## Criterio de aprobación
+## Revalidación visual breve
 
-PASS requiere cero datos privados visibles, cero identidades inferidas, navegación ida/vuelta funcional, estados diferenciados y ausencia de desbordamiento a 360 px. Cualquier insignia empresarial sin evidencia de `verified_companies` bloquea la revisión.
+1. Ejecutar `npm.cmd run dev:staging` desde la rama `feature/public-provider-discovery`.
+2. Confirmar **STAGING · MODO DE PRUEBA**.
+3. Verificar que escritorio y navegación inferior muestran **Prestadores** y conservan `/#/{experiencia}/buscar`.
+4. Abrir perfiles sin biografía de cada identidad disponible y comprobar el texto correspondiente.
+5. Confirmar que una biografía real se muestra sin modificaciones.
+6. Verificar que RUT, dirección tributaria, representante, correo, teléfono, documentos y datos administrativos no aparecen.
+
+## Criterio de cierre
+
+La Fase 2 puede respaldarse cuando las validaciones locales estén en PASS y la revisión breve no detecte regresiones. La ausencia de evidencia para fotografías reales, Empresa verificada y otros tamaños debe conservarse como pendiente, no como caso aprobado.

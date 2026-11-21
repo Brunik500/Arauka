@@ -54,3 +54,9 @@ test('Mi cuenta contiene un solo selector y separa cambiar, activar y hacer prin
   assert.match(app,/Usar \{activeIdentityLabel\} como experiencia principal/)
   assert.match(app,/disabled=\{item\.experience===mode\}/)
 })
+
+test('la experiencia activa deshabilitada usa cursor normal y conserva su estado principal',()=>{
+  assert.match(app,/aria-pressed=\{item\.experience===mode\} disabled=\{item\.experience===mode\}/)
+  assert.match(app,/item\.is_primary\?' · Principal':''/)
+  assert.match(styles,/:root\[data-arauka-mode\] \.experience-switcher \.btn\[aria-pressed="true"\]:disabled\{cursor:default\}/)
+})
